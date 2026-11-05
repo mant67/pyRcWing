@@ -61,6 +61,12 @@ Il progetto è distribuito secondo la licenza personalizzata con obbligo di attr
 
 Le versioni modificate devono essere identificate come tali e non devono suggerire l’approvazione dell’autore originale. Questa licenza personalizzata non è una licenza Open Source approvata da OSI. Le dipendenze di terzi restano soggette alle proprie licenze.
 
+## Esclusione di garanzia e responsabilità
+
+Il software è fornito «così com’è», senza garanzie. Usalo a tuo rischio. Non mi assumo responsabilità per danni, perdite, stampe non riuscite o altre conseguenze derivanti da uso improprio, difetti del software, geometrie generate o comportamento della stampante e dello slicer. Verifica autonomamente i modelli e le impostazioni di stampa prima dell’uso.
+
+Grazie per aver provato il progetto. Segnalazioni e suggerimenti sono benvenuti!
+
 ---
 
 # pyRcWing (English)
@@ -120,3 +126,10 @@ This project is distributed under the custom attribution license in [`LICENSE`](
 > Originally created by Marco Antinori
 
 Modified versions must be identified as modified and must not imply endorsement by the original author. This custom license is not an OSI-approved Open Source License. Third-party dependencies remain subject to their own licenses.
+
+
+## Disclaimer
+
+This software is provided “as is”, without warranty. Use it at your own risk. I am not responsible for damage, loss, failed prints, or other consequences resulting from improper use, software faults, generated geometry, or printer and slicer behavior. Please independently verify the models and print settings before use.
+
+Thanks for trying the project. Feedback and suggestions are very welcome!
