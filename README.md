@@ -6,7 +6,7 @@ L’applicazione è sviluppata da **Marco Antinori**. Per informazioni e contatt
 
 ## Screenshot
 
-![pyRcWing Screenshot](images/Screenshot 2026-11-05 175721.png)
+![pyRcWing Screenshot](images/anteprima_prusa.png)
 
 
 ## Stato del progetto
