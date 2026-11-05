@@ -6,7 +6,7 @@ L’applicazione è sviluppata da **Marco Antinori**. Per informazioni e contatt
 
 ## Stato del progetto
 
-Questa pubblicazione contiene la versione **9.1**. La modalità Spiral Vase a fessure e i percorsi di stampa senza retrazioni sono sperimentali. Prima di stampare un componente completo, controlla ogni STL e l’anteprima dello slicer; stampa prima un provino e verifica il G-code, in particolare che non siano state introdotte retrazioni indesiderate.
+Questa pubblicazione contiene la versione **9.1**. La modalità Spiral Vase a fessure e i percorsi di stampa senza retrazioni sono sperimentali. Prima di stampare un componente completo, controlla ogni STL e l’anteprima dello slicer; stampa prima un prova e verifica il G-code, in particolare che non siano state introdotte retrazioni indesiderate.
 
 ## Requisiti
 
@@ -38,7 +38,7 @@ py -3.11 pyRcWing.py
 
 ## Configurazioni ed esportazioni
 
-Le configurazioni dell’ala possono essere importate ed esportate dall’applicazione in formato JSON. Gli STL e i file di verifica vengono creati nella cartella scelta durante l’esportazione. Non pubblicare configurazioni, STL o dati personali senza aver prima controllato il loro contenuto.
+Le configurazioni dell’ala possono essere importate ed esportate dall’applicazione in formato JSON. Gli STL e i file di verifica vengono creati nella cartella scelta durante l’esportazione. 
 
 PrusaSlicer è opzionale: la verifica G-code si può attivare dalle impostazioni dell’applicazione. I controlli geometrici e della mesh vengono comunque eseguiti dall’app.
 
