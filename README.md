@@ -4,6 +4,11 @@
 
 L’applicazione è sviluppata da **Marco Antinori**. Per informazioni e contatti: [marco.antinori@outlook.it](mailto:marco.antinori@outlook.it).
 
+## Screenshot
+
+![pyRcWing Screenshot](images/anteprima_prusa.png)
+
+
 ## Stato del progetto
 
 Questa pubblicazione contiene la versione **9.1**. La modalità Spiral Vase a fessure e i percorsi di stampa senza retrazioni sono sperimentali. Prima di stampare un componente completo, controlla ogni STL e l’anteprima dello slicer; stampa prima un prova e verifica il G-code, in particolare che non siano state introdotte retrazioni indesiderate.
