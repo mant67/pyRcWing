@@ -1,5 +1,6 @@
 """Shared nominal planform; all lengths in mm, span along Z."""
 import math
+from airfoil_editor import profile_from_controls
 
 def elliptical_planform(p):
     return str(p.get('planform','trapezoidal')) == 'elliptical'
@@ -13,7 +14,8 @@ def planform_parameters(p):
     if not math.isfinite(q) or not 0<=q<=100:raise ValueError('Linea centrale ellisse richiesta tra 0 e 100%.')
     if not 0<ct<cr:raise ValueError('Pianta ellittica: la corda terminale deve essere positiva e minore della corda radice.')
     # Finite terminal profile avoids a degenerate slit at a mathematical point.
-    thickness=int(str(p.get('airfoil_tip',p.get('airfoil','2412')))[2:])/100
+    custom=profile_from_controls(p.get('custom_airfoil_tip',''),80)
+    thickness=(max(y for x,y in custom)-min(y for x,y in custom)) if custom else int(str(p.get('airfoil_tip',p.get('airfoil','2412')))[2:])/100
     width=float(str(p.get('larghezza_linea_vaso',.55)).replace(',','.'))
     if ct*thickness<4*width:raise ValueError('Pianta ellittica: aumenta la corda terminale (spessore NACA minimo: quattro larghezze linea).')
     return dict(planform=mode,ellipse_center_perc=q)

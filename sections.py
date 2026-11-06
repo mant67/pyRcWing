@@ -50,7 +50,7 @@ def section_preview(params,component):
         settings=connector_parameters(p);spars,_=parse_spars(p.get('spars',[]),0.,p['span'])
         if not spars and connector_ribs_enabled(p):raise ValueError('Con nervature attive, configura almeno un longherone e attiva il raccordo.')
         angle=math.radians(settings['diedro_semiala']);sn,cs=math.sin(angle),math.cos(angle)
-        chord=p['root_chord'];profile=naca_profile(p['airfoil'],points,max(.9,2*p['line_width'])/chord)
+        chord=p['root_chord'];profile=airfoil_profile(p,'root',points,max(.9,2*p['line_width'])/chord)
         directions=[]
         for spar in spars:
             root_values,delta_values=spar_axis(p,spar)
@@ -77,7 +77,7 @@ def section_preview(params,component):
             rings.append([(lead+x*chord,y*chord,z) for x,y in section_profile(p,z,te/chord)])
         tip,tip_length=tip_parameters(dict(p,skin=v['legamento']/2))
         if tip:
-            scale_end=2*v['larghezza_linea_vaso']/(p['tip_chord']*int(airfoil_tip_code(p)[2:])/100)
+            scale_end=2*v['larghezza_linea_vaso']/(p['tip_chord']*profile_thickness_ratio(p,'tip'))
             if scale_end>=.9:raise ValueError('Punta incompatibile con il profilo e la larghezza linea.')
             for fraction,scale in smooth_tip_sections()[1:]:
                 rings.append([(x,y,p['span']+tip_length*fraction) for x,y in smooth_tip_profile(p,fraction,points)])

@@ -1,6 +1,6 @@
 """Horizontal planform and draggable spar positions/angles."""
 import math
-from core import naca_profile,spar_axis,spar_automatic,legacy_spar_angle
+from core import airfoil_profile,spar_axis,spar_automatic,legacy_spar_angle
 
 
 class SparEditor:
@@ -30,7 +30,7 @@ class SparEditor:
         def coords(points):return [v for p in points for v in xy(*p)]
         c.create_polygon(coords(outline),fill='#dbeafe',outline='#64748b',tags='spars_wing')
         self.owner.note(c,16,10,'Longheroni · Ala orizzontale, radice a sinistra',w*.58-20)
-        root_profile=[(x*p['root_chord'],y*p['root_chord']) for x,y in naca_profile(p['airfoil'],80)]
+        root_profile=[(x*p['root_chord'],y*p['root_chord']) for x,y in airfoil_profile(p,'root',80)]
         profile_view=self.owner.profile_view(c,root_profile,(w*.61,48,w-18,150))
         self.owner.note(c,w*.61,12,'Sezione alla radice',w*.37)
         labels=[]

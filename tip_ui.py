@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 from core import (airfoil_tip_code, elliptical_planform, planform_parameters,
     planform_section, planform_outline, smooth_tip_sections, smooth_tip_profile,
-    tip_center_percentage, washout_point)
+    tip_center_percentage, washout_point, profile_thickness_ratio)
 
 
 def tip_suggestion(values):
@@ -17,7 +17,7 @@ def tip_suggestion(values):
     width=float(str(p.get('larghezza_linea_vaso',.55)).replace(',','.'))
     if not math.isfinite(width) or width<=0:raise ValueError('Larghezza linea non valida.')
     span,root,chord=p['span'],p['root_chord'],p['tip_chord']
-    if chord*int(code[2:])/100<=2*width/.9:
+    if chord*profile_thickness_ratio(p,'tip')<=2*width/.9:
         raise ValueError('Profilo terminale troppo sottile per la punta con questa larghezza linea.')
     lower=max(2*p['line_width'],1.3*width)+.1
     upper=max(lower,min(chord,.5*span))

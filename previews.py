@@ -160,7 +160,7 @@ class WizardPreviews:
         for key,default in (('rib_pitch',40.),('rib_angle',45.)):
             q[key]=float(self.app.vars[key].get().replace(',','.')) if connector_ribs_enabled(q) else default
         connector_structure_parameters(q)
-        chord=q['root_chord'];profile=naca_profile(q['airfoil'],q['points'],max(.9,2*q['line_width'])/chord)
+        chord=q['root_chord'];profile=airfoil_profile(q,'root',q['points'],max(.9,2*q['line_width'])/chord)
         angle=math.radians(settings['diedro_semiala']);directions=[]
         for spar in q['spars']:
             _,(dx,dy,dz)=spar_axis(q,spar);norm=math.sqrt(dx*dx+dy*dy+dz*dz)
@@ -190,7 +190,7 @@ class WizardPreviews:
         shift=-min(y*math.sin(roll)+z*math.cos(roll) for y,z in raw)
         double=str(q.get('doppio_rinforzo_raccordo','1')).lower() in ('1','true','yes')
         for i,spar in enumerate(q['spars'],1):
-            u=spar['position']/100;yc,_=camber_thickness(u,q['airfoil'])
+            u=spar['position']/100;yc,_=profile_camber_thickness(q,u,'root')
             _,(dx,dy,dz)=spar_axis(q,spar);norm=math.sqrt(dx*dx+dy*dy+dz*dz)
             direction=(dx/norm,dy/norm*cs+q['span']/norm*sn,-dy/norm*sn+q['span']/norm*cs)
             for side in (-1,1):

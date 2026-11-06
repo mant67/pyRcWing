@@ -16,11 +16,11 @@ def legacy_spar_angle(params,position):
 
 
 def spar_axis(params,spar):
-    from core import camber_thickness,airfoil_tip_code
+    from core import profile_camber_thickness
     span,cr,ct=params['span'],params['root_chord'],params['tip_chord'];u=spar['position']/100
-    yc,_=camber_thickness(u,params['airfoil']);root=(u*cr,yc*cr,0.)
+    yc,_=profile_camber_thickness(params,u,'root');root=(u*cr,yc*cr,0.)
     if spar_automatic(spar):
-        yt,_=camber_thickness(u,airfoil_tip_code(params))
+        yt,_=profile_camber_thickness(params,u,'tip')
         end=(planform_section(params,span)[1]+u*ct,yt*ct,span)
     else:
         # Manual rotation stays in the root X/Z plane: zero is its normal Z.

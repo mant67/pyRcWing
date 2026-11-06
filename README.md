@@ -19,7 +19,7 @@ Questa pubblicazione contiene la versione **9.1**. La modalità Spiral Vase a fe
 - Python 3.11 con Python Launcher (`py`)
 - Connessione Internet al primo avvio, per installare le librerie Python mancanti
 
-Il launcher installa `cadquery` e `shapely` nell’ambiente utente di Python 3.11, se non sono già disponibili. Non crea né richiede un ambiente virtuale. Le dipendenze sono distribuite secondo le rispettive licenze.
+Il launcher installa `cadquery`, `shapely` e `Pillow` nell’ambiente utente di Python 3.11, se non sono già disponibili. Non crea né richiede un ambiente virtuale. Le dipendenze sono distribuite secondo le rispettive licenze.
 
 ## Avvio rapido
 
@@ -37,7 +37,7 @@ Avvia_pyRcWing.cmd
 Per installare manualmente le dipendenze:
 
 ```bat
-py -3.11 -m pip install --user cadquery shapely==2.2.0
+py -3.11 -m pip install --user cadquery shapely==2.2.0 pillow
 py -3.11 pyRcWing.py
 ```
 
@@ -85,7 +85,7 @@ This public release contains **version 9.1**. Slotted Spiral Vase and zero-retra
 - Python 3.11 with the Python Launcher (`py`)
 - Internet access on first launch to install missing Python packages
 
-The launcher installs `cadquery` and `shapely` into the Python 3.11 user environment if they are not already available. It does not create or require a virtual environment. Dependencies are distributed under their respective licenses.
+The launcher installs `cadquery`, `shapely` and `Pillow` into the Python 3.11 user environment if they are not already available. It does not create or require a virtual environment. Dependencies are distributed under their respective licenses.
 
 ## Quick start
 
@@ -103,7 +103,7 @@ Avvia_pyRcWing.cmd
 To install dependencies manually:
 
 ```bat
-py -3.11 -m pip install --user cadquery shapely==2.2.0
+py -3.11 -m pip install --user cadquery shapely==2.2.0 pillow
 py -3.11 pyRcWing.py
 ```
 

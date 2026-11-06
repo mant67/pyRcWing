@@ -13,6 +13,7 @@ from planform_ui import PlanformEditor
 from configuration import ConfigurationMixin
 
 from menu import MenuMixin
+from airfoil_editor import AirfoilEditor
 
 class App(MenuMixin,ConfigurationMixin,tk.Tk):
     def __init__(self):
@@ -71,7 +72,8 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             (right,"Lunghezza ovale (mm)","hole_width","18"),
             (right,"Altezza ovale (mm)","hole_height","10"),
         ]
-        self.vars={}
+        self.vars={'custom_airfoil_root':tk.StringVar(value=''),'custom_airfoil_tip':tk.StringVar(value='')}
+        self.airfoil_editors={'airfoil':AirfoilEditor(self,'root'),'airfoil_tip':AirfoilEditor(self,'tip')}
         self.geometry_labels={}
         self.vars['create_ribs']=tk.StringVar(value='1')
         self.vars['nervature_specchiate_ala']=tk.StringVar(value='0')
@@ -87,11 +89,14 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         self.oval_check.pack(anchor='w',pady=(0,8))
         for parent,label,key,val in fields:
             row=ttk.Frame(parent); row.pack(fill="x",pady=3)
-            self.geometry_labels[key]=ttk.Label(row,text=label,width=29)
+            self.geometry_labels[key]=ttk.Label(row,text=label,width=24 if key in ('airfoil','airfoil_tip') else 29)
             self.geometry_labels[key].pack(side="left")
             v=tk.StringVar(value=val); self.vars[key]=v
             entry=(ttk.Spinbox(row,textvariable=v,width=14,from_=1,to=50,increment=1) if key=="hole_count" else ttk.Entry(row,textvariable=v,width=14))
-            entry.pack(side="right",fill="x",expand=True)
+            if key in ('airfoil','airfoil_tip'):
+                ttk.Button(row,text='Editor…',command=self.airfoil_editors[key].open,width=10).pack(side='right',padx=(6,0))
+                entry.configure(width=9);entry.pack(side='right')
+            else:entry.pack(side="right",fill="x",expand=True)
             if key in ('rib_pitch','rib_angle'):self.rib_entries.append(entry)
             if key in ('hole_count','hole_width','hole_height'):self.oval_entries.append(entry)
         self.vars['create_ribs'].trace_add('write',lambda *_:self.toggle_ribs())
@@ -102,7 +107,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         self.profile_canvas=tk.Canvas(root,height=175,width=750,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
         self.profile_canvas.pack(fill='x',pady=8)
         self.profile_canvas.bind('<Configure>',lambda event:self.draw_profile_preview())
-        for key in ('airfoil','airfoil_tip','root_chord','tip_chord'):self.vars[key].trace_add('write',lambda *_:self.draw_profile_preview())
+        for key in ('airfoil','airfoil_tip','custom_airfoil_root','custom_airfoil_tip','root_chord','tip_chord'):self.vars[key].trace_add('write',lambda *_:self.draw_profile_preview())
         self.draw_profile_preview()
         self.planform_editor=PlanformEditor(self,root,left)
         root=self.pages[2]
@@ -326,7 +331,8 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         if getattr(self,"loading_configuration",False):return
         canvas=self.profile_canvas;canvas.delete('all');width=max(300,canvas.winfo_width());height=175
         try:
-            p=dict(airfoil=self.vars['airfoil'].get().strip(),airfoil_tip=self.vars['airfoil_tip'].get().strip(),points=80,span=1.)
+            p=dict(airfoil=self.vars['airfoil'].get().strip(),airfoil_tip=self.vars['airfoil_tip'].get().strip(),
+                   custom_airfoil_root=self.vars['custom_airfoil_root'].get(),custom_airfoil_tip=self.vars['custom_airfoil_tip'].get(),points=80,span=1.)
             root_chord=float(self.vars['root_chord'].get().replace(',','.'))
             tip_chord=float(self.vars['tip_chord'].get().replace(',','.'))
             if not all(math.isfinite(v) and v>0 for v in (root_chord,tip_chord)):
@@ -410,8 +416,8 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
                 if not math.isfinite(p[key]) or p[key]<=0:raise ValueError('Apertura e corde devono essere positive e finite.')
             w=washout_parameters(p);angle=math.radians(w['washout_deg'])
             cr,ct=p['root_chord'],p['tip_chord'];pivot=ct*w['washout_pivot_perc']/100
-            root=[(x*cr,y*cr) for x,y in naca_profile(p['airfoil'],80)]
-            tip=[(x*ct,y*ct) for x,y in naca_profile(p['airfoil_tip'],80)]
+            root=[(x*cr,y*cr) for x,y in airfoil_profile(p,'root',80)]
+            tip=[(x*ct,y*ct) for x,y in airfoil_profile(p,'tip',80)]
             c,s=math.cos(angle),math.sin(angle)
             rotated=[(pivot+(x-pivot)*c-y*s,(x-pivot)*s+y*c) for x,y in tip]
             all_points=root+tip+rotated+[(pivot,0.)]
@@ -589,6 +595,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             except ValueError as exc:raise ValueError(f"Parametro semiala non valido: {key}.") from exc
             if not math.isfinite(p[key]) or (key!='sweep' and p[key]<=0):raise ValueError(f"Parametro semiala non valido: {key}.")
         p['points']=int(self.vars['points'].get());p['airfoil']=self.vars['airfoil'].get().strip();p['airfoil_tip']=self.vars['airfoil_tip'].get().strip()
+        p['custom_airfoil_root']=self.vars['custom_airfoil_root'].get();p['custom_airfoil_tip']=self.vars['custom_airfoil_tip'].get()
         airfoil_tip_code(p)
         for key,default in (('rib_pitch',40.),('rib_angle',45.)):
             p[key]=float(self.vars[key].get().replace(',','.')) if connector_ribs_enabled(p) else default
@@ -596,7 +603,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         connector_structure_parameters(p)
         p.update(self.spar_params())
         if not p['spars'] and connector_ribs_enabled(p):raise ValueError('Con nervature attive, configura almeno un longherone nel passo Longheroni.')
-        naca_profile(p['airfoil'],p['points'])
+        airfoil_profile(p,'root',p['points']);airfoil_profile(p,'tip',p['points'])
         if p['points']<20:raise ValueError('Usa almeno 20 punti profilo.')
         p.update({key:self.vars[key].get() for key in ('diametro_ugello','larghezza_linea_vaso','altezza_strato_vaso','fessura_vaso','verifica_prusaslicer')})
         p.update({key:value.get() for key,value in self.connector_vars.items()})

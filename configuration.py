@@ -35,6 +35,11 @@ def validate_configuration(data,wing_keys,connector_keys):
     if not isinstance(data.get('wing'),dict):raise ValueError('Configurazione ala non valida.')
     if isinstance(data.get('wing'),dict) and 'verifica_prusaslicer' not in data['wing']:
         data=copy.deepcopy(data);data['wing']['verifica_prusaslicer']='0'
+    if isinstance(data.get('wing'),dict):
+        missing=[key for key in ('custom_airfoil_root','custom_airfoil_tip') if key in wing_keys and key not in data['wing']]
+        if missing:
+            data=copy.deepcopy(data)
+            for key in missing:data['wing'][key]=''
     if data.get('wing',{}).get('verifica_prusaslicer') not in ('0','1'):
         raise ValueError('Opzione verifica PrusaSlicer non valida.')
     strings(data.get('wing'),wing_keys,'ala')

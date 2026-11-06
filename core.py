@@ -19,6 +19,7 @@ from lightening import oval_parameters, rib_ovals, verify_oval_export, wing_mirr
 from planform import elliptical_planform, planform_parameters, planform_section, planform_stations, planform_outline
 
 from spars import spar_automatic, legacy_spar_angle, spar_axis, has_manual_spar_angles
+from airfoil_editor import profile_from_controls
 
 VERSION = "9.1"
 
@@ -68,12 +69,40 @@ def airfoil_tip_code(params):
     return code
 
 
+def airfoil_profile(params,end='root',n=None,trailing_edge_ratio=0.):
+    """Return a NACA or edited normalized profile at a wing endpoint."""
+    key='custom_airfoil_root' if end=='root' else 'custom_airfoil_tip'
+    code=str(params['airfoil'] if end=='root' else params.get('airfoil_tip',params['airfoil'])).strip()
+    count=int(n or params.get('points',20))
+    custom=profile_from_controls(params.get(key,''),count,trailing_edge_ratio)
+    return custom if custom is not None else naca_profile(code,count,trailing_edge_ratio)
+
+
+def profile_camber_thickness(params,x,end='root'):
+    profile=airfoil_profile(params,end,max(80,int(params.get('points',20))))
+    split=max(range(len(profile)),key=lambda i:profile[i][0])
+    upper=profile[:split+1];lower=list(reversed(profile[split+1:]))
+    def value(points):
+        if x<=points[0][0]:return points[0][1]
+        for a,b in zip(points,points[1:]):
+            if x<=b[0]:
+                t=(x-a[0])/max(1e-12,b[0]-a[0]);return a[1]+(b[1]-a[1])*t
+        return points[-1][1]
+    top,bottom=value(upper),value(lower)
+    return (top+bottom)/2,(top-bottom)/2
+
+
+def profile_thickness_ratio(params,end='root'):
+    return max((2*profile_camber_thickness(params,i/100,end)[1] for i in range(1,100)),default=0.)
+
+
 def section_profile(params,z,trailing_edge_ratio=0.):
     """Morphing lineare di punti corrispondenti dei due profili normalizzati."""
     root=str(params['airfoil']).strip();tip=airfoil_tip_code(params)
-    first=naca_profile(root,params['points'],trailing_edge_ratio)
-    if root==tip or z<=0:return first
-    last=naca_profile(tip,params['points'],trailing_edge_ratio)
+    first=airfoil_profile(params,'root',params['points'],trailing_edge_ratio)
+    same_profile=(root==tip and params.get('custom_airfoil_root','')==params.get('custom_airfoil_tip',''))
+    if same_profile or z<=0:return first
+    last=airfoil_profile(params,'tip',params['points'],trailing_edge_ratio)
     f=max(0.,min(1.,z/params['span']))
     if f>=1:return last
     return [(a+(c-a)*f,b+(d-b)*f) for (a,b),(c,d) in zip(first,last)]
@@ -296,7 +325,7 @@ def smooth_tip_profile(params,fraction,points=None):
     f=max(0.,min(1.,fraction));scale=math.sqrt(max(0.,1-f*f))
     chord,lead,_=planform_section(p,p['span']);q=tip_center_percentage(p)/100
     length=tip_parameters(p)[1];width=float(str(p.get('larghezza_linea_vaso',p['line_width'])).replace(',','.'))
-    te=max(.9,2*width);profile=naca_profile(airfoil_tip_code(p),n,te/chord)
+    te=max(.9,2*width);profile=airfoil_profile(p,'tip',n,te/chord)
     pivot=lead+q*chord
     xy=[(pivot+(x-q)*chord*scale,y*chord*scale) for x,y in profile]
     if elliptical_planform(p):
@@ -361,7 +390,8 @@ def make_elliptical_tip(cq, params, return_geometry=False, outer_only=False, ter
     skin = params["skin"]
     te = max(.9,2*params["line_width"])
     center = cq.Vector(lead+chord*tip_center_percentage(params)/100,0,span)
-    outer_base = make_section_wire(cq,span,chord,lead,airfoil_tip_code(params),params["points"],trailing_edge_thickness=te)
+    outer_profile=airfoil_profile(params,'tip',params['points'],te/chord)
+    outer_base = make_section_wire(cq,span,chord,lead,airfoil_tip_code(params),params["points"],trailing_edge_thickness=te,profile=outer_profile)
     def rounded_loft(base, extension):
         builder = BRepOffsetAPI_ThruSections(True, True, 1e-7)
         # Campionamento angolare: più sezioni in prossimità della punta.
@@ -383,7 +413,7 @@ def make_elliptical_tip(cq, params, return_geometry=False, outer_only=False, ter
         return solid
     outer_tip = rounded_loft(outer_base,length)
     if outer_only:return outer_tip
-    inner_base = make_section_wire(cq,span,chord,lead,airfoil_tip_code(params),params["points"],skin,True,te)
+    inner_base = make_section_wire(cq,span,chord,lead,airfoil_tip_code(params),params["points"],skin,True,te,profile=outer_profile)
     cavity = rounded_loft(inner_base,length-skin)
     tip = outer_tip.cut(cavity).clean()
     if not tip.isValid() or len(tip.Solids()) != 1:
@@ -769,12 +799,12 @@ def build_central_connector(params,progress=None):
         if not math.isfinite(params[key]) or params[key]<=0:raise ValueError(f"Geometria semiala non valida: {key}.")
     if not math.isfinite(params['sweep']):raise ValueError("Freccia semiala non valida.")
     if params['points']<20:raise ValueError("Usa almeno 20 punti profilo.")
-    naca_profile(params['airfoil'],params['points'])
+    airfoil_profile(params,'root',params['points'])
     angle=p['diedro_semiala'];radians=math.radians(angle)
     sine,cosine=math.sin(radians),math.cos(radians)
     chord=params['root_chord'];length=p['lunghezza_innesto_longheroni'];wall=p['spessore_pareti_raccordo']
     te=max(.9,2*params['line_width'])
-    profile=naca_profile(params['airfoil'],params['points'],te/chord)
+    profile=airfoil_profile(params,'root',params['points'],te/chord)
     directions=[]
     for spar in spars:
         root_values,delta_values=spar_axis(params,spar)
@@ -782,7 +812,7 @@ def build_central_connector(params,progress=None):
         directions.append(cq.Vector(local.x,local.y*cosine+local.z*sine,-local.y*sine+local.z*cosine))
     # Spazio per due fondi ciechi separati e per l'inclinazione delle radici.
     half=connector_half_span(params,p,profile,[d.z for d in directions])
-    root_wire=make_section_wire(cq,0,chord,0,params['airfoil'],params['points'],trailing_edge_thickness=te)
+    root_wire=make_section_wire(cq,0,chord,0,params['airfoil'],params['points'],trailing_edge_thickness=te,profile=profile)
     right_wire=root_wire.rotate((0,0,0),(1,0,0),-angle).translate((0,0,half))
     left_wire=cq.Wire.makePolygon([cq.Vector(x*chord,y*chord*cosine,-half+y*chord*sine) for x,y in profile],close=True)
     if progress:progress("Creazione del raccordo centrale e delle radici inclinate…")
@@ -791,7 +821,7 @@ def build_central_connector(params,progress=None):
     bores=[];guards=[];axes=[]
     extent=max(chord,4*half,100.)*3
     for index,(spar,direction) in enumerate(zip(spars,directions),1):
-        u=spar['position']/100;yc,_=camber_thickness(u,params['airfoil'])
+        u=spar['position']/100;yc,_=profile_camber_thickness(params,u,'root')
         for side in (1,-1):
             root=cq.Vector(u*chord,yc*chord*cosine,side*(half-yc*chord*sine))
             outward=cq.Vector(direction.x,direction.y,side*direction.z)
@@ -1229,8 +1259,8 @@ def build_spiral_vase_wing(params,progress=None):
     total=span+tip_length
     tip_scale=0.
     if tip_enabled:
-        nominal_thickness=ct*int(airfoil_tip_code(params)[2:])/100
-        if nominal_thickness<=0:raise ValueError('Spessore NACA non nullo richiesto per la punta Spiral Vase.')
+        nominal_thickness=ct*profile_thickness_ratio(params,'tip')
+        if nominal_thickness<=0:raise ValueError('Spessore del profilo non nullo richiesto per la punta Spiral Vase.')
         tip_scale=2*v['larghezza_linea_vaso']/nominal_thickness
         if tip_scale>=.9:raise ValueError('Corda di estremità troppo piccola per la terminazione della punta con questo ugello.')
     wires=[];floors=[];floor_profiles=[];edge_profiles=[];roofs=[];tip_outer=None
@@ -1713,7 +1743,8 @@ def params_from_ui(values):
     # Spessori condivisi da alloggiamenti e raccordo; nessun selettore CAD.
     p['skin_perimeters']=p['rib_perimeters']=1
     p['skin']=p['rib_thickness']=p['line_width']
-    naca_profile(p['airfoil'],p['points'])
+    airfoil_profile(p,'root',p['points'])
+    airfoil_profile(p,'tip',p['points'])
     airfoil_tip_code(p)
     p.update(planform_parameters(p))
     p['elliptical_tip'],p['tip_length']=tip_parameters(p)
