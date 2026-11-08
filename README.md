@@ -73,7 +73,7 @@ Grazie per aver provato il progetto. Segnalazioni e suggerimenti sono benvenuti!
 
 **pyRcWing** is a desktop application for configuring RC wings and 3D-printable components. Its wizard covers planform geometry, NACA airfoils, washout, wing tips, spars, ailerons, hinges, servo pockets, center sections and cutting components into printable pieces. It exports components as STL files.
 
-The application is developed by **Marco Antinori**. Contact: [marco.antinori@outlook.it](mailto:marco.antinori@outlook.it).
+The application is developed by **Marco Antinori**. Contact: [marco](mailto:marco669602@gmail.com)..
 
 ## Project status
 
