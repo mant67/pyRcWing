@@ -2,7 +2,7 @@
 
 **pyRcWing** è un’applicazione desktop per configurare ali RC e componenti stampabili in 3D. Offre un wizard per geometria, profili NACA, washout, punta, longheroni, alettone, cerniere, servo, raccordo centrale e sezionatura in pezzi. Esporta i componenti in formato STL.
 
-L’applicazione è sviluppata da **Marco Antinori**. Per informazioni e contatti: [marco.antinori@outlook.it](mailto:marco.antinori@outlook.it).
+L’applicazione è sviluppata da **Marco Antinori**. Per informazioni e contatti: [marco](mailto:marco669602@gmail.com).
 
 ## Screenshot
 
