@@ -1,5 +1,6 @@
 from mesh_checks import final_mesh_checks
 """Wizard di configurazione; la geometria risiede nel modulo core v91."""
+# File revision: 1
 import tkinter as tk
 import copy
 from tkinter import ttk, filedialog, messagebox
@@ -350,9 +351,12 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             for profile,color,dash,key in zip(profiles,('#2563eb','#64748b','#ea580c'),((),(4,3),()),('root','middle','tip')):
                 coords=[coord for x,y in profile+[profile[0]] for coord in (ox+x*scale,oy-y*scale)]
                 canvas.create_line(*coords,fill=color,width=2,dash=dash,tags=('profile','profile_'+key))
-            labels=(f"Radice {p['airfoil']} · {root_chord:g} mm",
+            def display_profile(code,custom):
+                data=json.loads(p[custom]) if p[custom] else {}
+                return data.get('name') or (p[code]+' *' if 'upper' in data else p[code])
+            labels=(f"Radice {display_profile('airfoil','custom_airfoil_root')} · {root_chord:g} mm",
                     f"Metà apertura · {chords[1]:g} mm",
-                    f"Estremità {p['airfoil_tip']} · {tip_chord:g} mm")
+                    f"Estremità {display_profile('airfoil_tip','custom_airfoil_tip')} · {tip_chord:g} mm")
             for i,(text,color) in enumerate(zip(labels,('#2563eb','#64748b','#ea580c'))):
                 canvas.create_text(12+i*(width-24)/3,12,text=text,anchor='w',fill=color,font=('Segoe UI',9),tags='profile_legend')
         except (ValueError,TypeError,ZeroDivisionError,OverflowError) as exc:

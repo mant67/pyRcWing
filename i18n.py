@@ -1,4 +1,5 @@
 """Display-only Italian/English translation; configuration keys stay unchanged."""
+# File revision: 5
 import re,functools
 import tkinter as tk
 from tkinter import messagebox,filedialog
@@ -157,6 +158,28 @@ Modifica => Edit
 Editor… => Editor…
 Editor profilo radice => Root airfoil editor
 Editor profilo estremità => Tip airfoil editor
+Libreria profili => Airfoil library
+Salva profilo => Save airfoil
+Chiudi e applica => Close and apply
+Note del profilo => Airfoil notes
+Nome del profilo: => Airfoil name:
+Profilo alare => Airfoil
+Profilo salvato nella libreria. => Airfoil saved to the library.
+Calibra => Calibrate
+Rimuovi immagine => Remove image
+Carica immagine… => Load image…
+Ruota => Rotate
+Fine rotazione => Finish rotation
+Trascina la croce per spostare il pivot. Trascina altrove per ruotare. => Drag the crosshair to move the pivot. Drag elsewhere to rotate.
+Trascina le maniglie per modificare il profilo o lo sfondo per spostarlo. => Drag the handles to edit the airfoil or drag the background to move it.
+Inserisci un angolo di rotazione valido. => Enter a valid rotation angle.
+Rotella per lo zoom dello sfondo. Tasto destro per i comandi del profilo e dello sfondo. => Use the mouse wheel to zoom the background. Right-click for airfoil and background commands.
+Impostazioni editor => Editor settings
+Trascina le maniglie interne. I bordi fissano la lunghezza della corda. => Drag the internal handles. The edges fix the chord length.
+Profilo modificato. Premi Chiudi e applica per aggiornare l’ala. => Airfoil edited. Click Close and apply to update the wing.
+Seleziona un punto all’interno dell’immagine. => Pick a point inside the image.
+Scegli un secondo punto diverso dal primo. => Pick a second point different from the first.
+Distanza reale tra i due punti (mm): => Actual distance between the two points (mm):
 Importa immagine… => Import image…
 Calibra con due punti => Calibrate with two points
 Sposta sfondo => Move background

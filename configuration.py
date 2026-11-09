@@ -1,4 +1,5 @@
 """Versioned JSON configuration files. No CAD objects or execution state."""
+# File revision: 1
 import copy
 import json
 import math
@@ -27,7 +28,8 @@ def validate_configuration(data,wing_keys,connector_keys):
     def strings(values,keys,label):
         if not isinstance(values,dict) or set(values)!=set(keys):
             raise ValueError('Configurazione '+label+' incompleta o non compatibile con questa versione.')
-        if any(not isinstance(v,str) or len(v)>1000 for v in values.values()):
+        if any(not isinstance(value,str) or len(value)>(20000 if key in ('custom_airfoil_root','custom_airfoil_tip') else 1000)
+               for key,value in values.items()):
             raise ValueError('Valori non validi nella configurazione '+label+'.')
     # Configurations saved by v75 predate the independent wing mirror switch.
     if isinstance(data.get('wing'),dict) and 'nervature_specchiate_ala' in wing_keys and 'nervature_specchiate_ala' not in data['wing']:

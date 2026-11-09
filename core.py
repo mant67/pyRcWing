@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# pyRcWing v9.1 — motore geometrico
+# pyRcWing v9.1.1 — motore geometrico
+# File revision: 1
 # Generazione STL con solidi CAD e unioni booleane; non usa OpenSCAD.
 # Dipendenza: cadquery (installare con: py -m pip install cadquery)
 import math, os
@@ -21,7 +22,7 @@ from planform import elliptical_planform, planform_parameters, planform_section,
 from spars import spar_automatic, legacy_spar_angle, spar_axis, has_manual_spar_angles
 from airfoil_editor import profile_from_controls
 
-VERSION = "9.1"
+VERSION = "9.1.1"
 
 def naca_profile(code="2412", n=80, trailing_edge_ratio=0.0):
     code = str(code).strip()
