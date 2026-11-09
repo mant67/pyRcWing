@@ -3,6 +3,7 @@
 The receiving region is an unbranched nominal envelope: its printed interior,
 not an inner CAD wire, is the socket. Never introduce a closed inner ring.
 """
+# File revision: 2
 import copy
 import math
 
@@ -381,37 +382,63 @@ def anchoring_collar(solid,params,male,cut,depth,width,origin):
 
 
 def female_supports(solid,params,region,cut,length,safety,width,gap):
-    """Vertical removable blades aligned to the interrupted ribs at the socket end."""
+    """Separate, one-line blades in print coordinates, with clearance from the skin."""
     import cadquery as cq
-    from core import ordered_vase_loft,vase_parameters
-    b=region.BoundingBox();finish=cut+length+safety;end=finish-gap
-    cap=z_box(region,cut,end)
-    masks={'lower':region.translate((0,-(2*width+gap),0)).intersect(cap),
-           'upper':region.translate((0,2*width+gap,0)).intersect(cap)}
-    slits=[];records=[];positions=[];origin=getattr(solid,'_washout_origin',0.)
-    for rib,kind in zip(getattr(solid,'_joiner_support_ribs',[]),getattr(solid,'_joiner_support_types',[])):
-        bb=rib.BoundingBox()
-        if not bb.zmin<finish<bb.zmax:continue
-        sections=cq.Workplane('XY').add(rib).section(finish+1e-5).val().Wires()
-        for wire in sections:
-            points=[rigid_xy(params,p,finish+origin) for p in wire_points(wire)]
-            # Record the intersection with the chord plane; plane direction stays fixed in print XY.
-            midx=sum(x for x,y in points)/len(points)
-            if any(abs(midx-x)<2*width for x in positions):continue
-            frames=[]
-            for z in (cut,end):frames.append(polygon_wire([rigid_xy(params,p,z+origin,inverse=True) for p in points],z))
-            blade=ordered_vase_loft(cq,frames)
-            local=blade.intersect(masks[kind])
-            if local.Solids() and local.Volume()>1e-8:
-                slits.append(local);positions.append(midx)
-                records.append(dict(famiglia=kind,verticale_in_stampa=True,inizio_z=cut,fine_z=end,allineamento_nervatura_z=finish,gap_assiale=gap))
-    if not slits:
-        gap_slit=vase_parameters(params)['fessura_vaso'];x=(b.xmin+b.xmax)/2;pad=max(b.xlen,b.ylen)+1
-        blade=cq.Workplane('XY').box(gap_slit,2*pad,end-cut).translate((x,(b.ymin+b.ymax)/2,(cut+end)/2)).val()
-        local=blade.intersect(masks['lower'])
-        if not local.Solids() or local.Volume()<1e-8:raise ValueError('Nessun supporto femmina stampabile con queste quote.')
-        slits=[local];records=[dict(famiglia='lower',verticale_in_stampa=True,centrato=True,inizio_z=cut,fine_z=end)]
-    return valid(region.cut(*slits,tol=1e-6),'Supporti verticali femmina'),records
+    from shapely.geometry import LineString, Polygon
+    from shapely.ops import unary_union
+
+    finish=cut+length+safety
+    height=finish-gap-cut
+    origin=getattr(solid,'_washout_origin',0.)
+    targets=[(bore,'bore') for bore,kind in zip(solid._joiner_cutters,solid._joiner_cut_types) if kind=='bore']
+    targets.extend(zip(solid._joiner_ribs,solid._joiner_rib_types))
+    footprints=[]
+    for target,kind in targets:
+        bounds=target.BoundingBox()
+        if not bounds.zmin<finish<bounds.zmax:continue
+        for wire in cq.Workplane('XY').add(target).section(finish+1e-5).val().Wires():
+            face=Polygon([rigid_xy(params,p,finish+origin) for p in wire_points(wire)])
+            if not face.is_valid or face.area<1e-8:continue
+            if kind=='bore':
+                # The printed tube wall lies outside the bore. Match its
+                # complete outline, including inclined or washed-out bores.
+                footprints.append((face.buffer(width).difference(face),kind))
+            else:
+                corners=list(face.minimum_rotated_rectangle.exterior.coords)[:4]
+                sides=[LineString((corners[i],corners[(i+1)%4])) for i in range(4)]
+                short=min(range(4),key=lambda i:sides[i].length)
+                axis=LineString([sides[i].interpolate(.5,normalized=True) for i in (short,(short+2)%4)])
+                footprints.append((axis.buffer(width/2,cap_style=2),kind))
+    if not footprints:return [],[]
+
+    # Reserve one extrusion width for the printed skin and the requested gap.
+    # Intersect the usable interior at all heights so blades stay vertical.
+    available=None
+    steps=max(2,math.ceil(height/.2))
+    for i in range(steps+1):
+        z=cut+max(1e-5,height*i/steps)
+        face=world_face(params,section_wire(region,z),z+origin).buffer(-width-gap-.01)
+        available=face if available is None else available.intersection(face)
+        if available.is_empty:break
+    blades=[]
+    occupied=[]
+    records=[]
+    for footprint,kind in footprints:
+        clipped=footprint.intersection(available)
+        if occupied:clipped=clipped.difference(unary_union(occupied).buffer(gap))
+        if kind=='bore':
+            if footprint.difference(clipped).area>1e-6:
+                raise ValueError(f'Taglio Z={cut:g}: il supporto anulare della baionetta non entra con il gap richiesto. Riduci il gap o sposta il taglio.')
+            clipped=footprint
+        for face in getattr(clipped,'geoms',[clipped]):
+            if face.geom_type!='Polygon' or face.area<2*width*width:continue
+            outline=polygon_wire(list(face.exterior.coords)[:-1],0.)
+            holes=[polygon_wire(list(hole.coords)[:-1],0.) for hole in face.interiors]
+            blades.append(valid(cq.Solid.extrudeLinear(outline,holes,cq.Vector(0,0,height)),'Supporto removibile'))
+            occupied.append(face)
+            records.append(dict(tipo='anello_baionetta' if kind=='bore' else 'lama_nervatura',
+                inizio_z=cut,fine_z=cut+height,gap_assiale=gap,gap_pelle=gap,larghezza_parete=width))
+    return blades,records
 
 
 def aileron_end_joiner_envelope(solid,params,cut,depth,length):
@@ -492,16 +519,21 @@ def build_joint(solid,params,cut,settings,origin):
     cuts=live_ribs(solid,full,width)
     tongue=valid(full.cut(*cuts,tol=1e-6) if cuts else full,'Linguetta')
     collar,anchor_report=anchoring_collar(solid,params,male,cut,anchor_depth,width,origin)
-    female_region=envelope.intersect(z_box(envelope,cut,finish));supports=[]
+    female_region=envelope.intersect(z_box(envelope,cut,finish));supports=[];blades=[];socket=None
     if settings['FemaleSupportEnabled']:
-        female_region,supports=female_supports(solid,params,female_region,cut,length,safety,width,settings['FemaleSupportGap'])
+        blades,supports=female_supports(solid,params,female_region,cut,length,safety,width,settings['FemaleSupportGap'])
+        if blades:
+            zs=[cut+(finish-cut)*i/count for i in range(count+1)]
+            inner=[offset_face(world_face(params,section_wire(female_region,min(finish-1e-5,max(cut+1e-5,z))),z+origin),-width) for z in zs]
+            zs[0]-=.01
+            socket=ordered_vase_loft(cq,coherent_wires(inner,zs,params,origin))
     female_region=valid(female_region,'Innesto femmina')
-    return dict(tongue=tongue,envelope=full,collar=collar,anchor_depth=anchor_depth,female=female_region,cut=cut,finish=finish,
+    return dict(tongue=tongue,envelope=full,collar=collar,anchor_depth=anchor_depth,female=female_region,cut=cut,finish=finish,blades=blades,socket=socket,
         report=dict(quota_taglio=cut,lunghezza=length,margine_nervature=safety,
             shrink_offset=shrink,gioco_minimo=clear,gioco_inserimento_richiesto=min(clear,.01),offset_femmina_verso_interno=shrink-clear,
             fine_scasso=end_joiner,superficie_maschio=male.area,profilo_comune_per_inserimento=bool(end_joiner),offset_locale_uniforme=True,distacco_minimo=min(distances),distacco_massimo=max(distances),campioni_inserimento=count+1,raccordo_radice=anchor_report,nervature_proseguite_su_piani_originali=True,
             supporto=settings['FemaleSupportEnabled'],gap_supporto=settings['FemaleSupportGap'],supporti_generati=supports,
-            nota='Femmina libera da nervature nel tratto di innesto; cavità fisica generata dallo slicer Spiral Vase. Supporto eventuale collegato a una sola pelle, da rimuovere.'))
+            nota='Femmina libera da nervature nel tratto di innesto. Le lame removibili sono esportate separatamente, con distacco dalla pelle e dai rinforzi.'))
 
 
 def apply_joiners(solid,params,pieces,cuts,progress=None):
@@ -532,6 +564,7 @@ def apply_joiners(solid,params,pieces,cuts,progress=None):
         if i:
             j=joints[i-1];extent=j['finish']-start
             part=part.cut(z_box(part,-1,extent)).fuse(j['female'].translate((0,0,-start)),tol=1e-6)
+            piece['support_blades']=j['blades']
             reports.append(dict(lato='femmina',**j['report']))
         if i<len(joints):
             j=joints[i]
@@ -540,6 +573,11 @@ def apply_joiners(solid,params,pieces,cuts,progress=None):
             part=part.cut(z_box(part,anchor_start,piece['end']-start+1)).fuse(j['collar'].translate((0,0,-start)),j['tongue'].translate((0,0,-start)),tol=1e-6)
             reports.append(dict(lato='maschio',**j['report']));height+=settings['JoinerLength']
         part=valid(part,f'Pezzo {i+1}')
+        if i and joints[i-1]['socket'] is not None:
+            hollow=valid(part.cut(joints[i-1]['socket'].translate((0,0,-start)),tol=1e-6),'Femmina aperta per supporti')
+            for attr in ('_washout_params','_washout_origin'):
+                if hasattr(piece['solid'],attr):setattr(hollow,attr,getattr(piece['solid'],attr))
+            piece['supported_body']=hollow
         for attr in ('_washout_params','_washout_origin','_oval_params'):
             if hasattr(piece['solid'],attr):setattr(part,attr,getattr(piece['solid'],attr))
         extras=[]

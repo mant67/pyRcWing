@@ -1,8 +1,11 @@
 """Anteprime nominali X/Z e sezionatura CAD, compatibili con la punta parametrica."""
+# File revision: 2
 import copy
 import json
 import math
 import os
+import shutil
+import struct
 import tempfile
 import threading
 import uuid
@@ -188,10 +191,50 @@ def write_piece_sidecars(params,path,piece,height,component):
         data=json.loads(report.read_text(encoding='utf-8'));data['strati_pieni_pezzo']=dict(inferiori=count_bottom,superiori=count_top)
         report.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
     data=json.loads(report.read_text(encoding='utf-8'))
+    if piece.get('support_blades'):
+        combined=path.with_suffix('.con_supporti.ini')
+        profile=settings.read_text(encoding='utf-8')
+        combined.write_text('# STL con femmina e supporti già allineati.\n'+
+            profile.replace('spiral_vase = 1','spiral_vase = 0').replace('thin_walls = 0','thin_walls = 1'),encoding='utf-8')
+        settings.unlink()
+        settings=combined
+        data.update(impostazioni_slicer=settings.name,spirale_continua=False,
+            campioni_sezione=[],verifica_ovali_gcode=dict(eseguita=False,esito=None),
+            verifica_slicer='NON ESEGUITA sullo STL con supporti.',
+            nota='Femmina e lame removibili incluse nello stesso STL come corpi separati dal gap.')
     data['parametri_generazione']={k:v for k,v in params.items() if not k.startswith('_')}
     data['riferimento_parametri']='Componente originale, seguito dai tagli Z specificati in sezionatura.'
     report.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
     return settings,report
+
+
+def merge_binary_stls(paths, destination):
+    """Package closed, aligned shells without fusing or moving them."""
+    with destination.open('wb') as output:
+        output.write(b'pyRcWing'.ljust(84,b'\0'))
+        count=0
+        for path in paths:
+            with path.open('rb') as source:
+                source.seek(80)
+                triangles,=struct.unpack('<I',source.read(4))
+                if path.stat().st_size!=84+50*triangles:
+                    raise ValueError(f'STL binario non valido: {path.name}')
+                shutil.copyfileobj(source,output)
+                count+=triangles
+        output.seek(80)
+        output.write(struct.pack('<I',count))
+
+
+def export_supported_piece(piece,path,tolerance,progress):
+    # The body receives its washout during export. The blades are already in
+    # print coordinates and must stay vertical.
+    with tempfile.TemporaryDirectory(prefix='.supporti-',dir=path.parent) as temp:
+        parts=[]
+        for i,solid in enumerate([piece['supported_body'],*piece['support_blades']]):
+            local=Path(temp)/f'{i}.stl'
+            export_verified_stl(solid,local,tolerance,progress=progress if i==0 else None)
+            parts.append(local)
+        merge_binary_stls(parts,path)
 
 
 class SectioningPanel(ttk.Frame):
@@ -243,7 +286,7 @@ class SectioningPanel(ttk.Frame):
             self.joiner_controls.append((entry,key))
         support=ttk.Checkbutton(group,text='Supporti femmina verticali e removibili',variable=self.joiner_vars['FemaleSupportEnabled'],onvalue='1',offvalue='0',command=self.toggle_joiners)
         support.grid(row=4,column=0,columnspan=4,sticky='w');self.joiner_controls.append((support,'FemaleSupportEnabled'))
-        ttk.Label(group,text='Maschio ancorato sotto il taglio sul pezzo inferiore, femmina sul successivo. Distacco locale uniforme: linea effettiva + gioco aggiuntivo. Il profilo viene verificato durante l’inserimento. I supporti crescono verticali fino alle nervature interrotte e vanno rimossi prima dell’incollaggio. La verifica PrusaSlicer è opzionale e si attiva nel primo pannello.',wraplength=920).grid(row=5,column=0,columnspan=4,sticky='w',pady=(5,0))
+        ttk.Label(group,text='Maschio sul pezzo inferiore, femmina sul successivo. I supporti removibili sono inclusi nello STL della femmina. Il gap li separa dalla pelle e dai rinforzi sovrastanti. Rimuovili prima dell’incollaggio.',wraplength=920).grid(row=5,column=0,columnspan=4,sticky='w',pady=(5,0))
         self.joiner_note=tk.StringVar()
         ttk.Label(group,textvariable=self.joiner_note,wraplength=920,foreground='#6d28d9').grid(row=6,column=0,columnspan=4,sticky='w',pady=(4,0))
         for variable in self.joiner_vars.values():variable.trace_add('write',lambda *_:self.joiner_changed())
@@ -569,10 +612,17 @@ class SectioningPanel(ttk.Frame):
                 piece_params=copy.deepcopy(p)
                 piece_params['_female_joiner']=any(j.get('lato')=='femmina' for j in piece.get('joiners',[]))
                 piece_params['_verifica_vaso'].pop('verifica_ovali_gcode',None)
-                export_verified_stl(piece['solid'],path,tolerance,progress=callback,params=piece_params)
+                if piece.get('support_blades'):
+                    export_supported_piece(piece,path,tolerance,callback)
+                else:
+                    export_verified_stl(piece['solid'],path,tolerance,progress=callback,params=piece_params)
                 self.notify('piece',0,1,i,len(pieces),'reports')
                 settings,report=write_piece_sidecars(piece_params,path,piece,height,component)
-                files.append(path.name);manifest['pezzi'].append(dict(file=path.name,inizio_z_locale=piece['start'],fine_z_locale=piece['end'],altezza=piece.get('print_height',piece['end']-piece['start']),giunzioni=piece.get('joiners',[]),impostazioni=settings.name,rapporto=report.name))
+                files.append(path.name)
+                item=dict(file=path.name,inizio_z_locale=piece['start'],fine_z_locale=piece['end'],altezza=piece.get('print_height',piece['end']-piece['start']),giunzioni=piece.get('joiners',[]),impostazioni=settings.name,rapporto=report.name)
+                manifest['pezzi'].append(item)
+                if piece.get('support_blades'):
+                    item['numero_supporti_inclusi']=len(piece['support_blades'])
                 self.notify('piece',1,1,i,len(pieces),'reports')
             self.notify('manifest')
             (staging/'piano_tagli.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
