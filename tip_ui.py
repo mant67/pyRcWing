@@ -1,4 +1,5 @@
 """Horizontal tip preview and geometric starting values; no change to CAD rules."""
+# File revision: 2
 import math
 import tkinter as tk
 from tkinter import ttk
@@ -39,9 +40,13 @@ def tip_suggestion(values):
 
 
 class TipEditor:
-    def __init__(self,owner):
-        self.owner=owner;self.app=owner.app;self.canvas=owner.canvases['tip']
+    def __init__(self,owner,canvas=None):
+        self.owner=owner;self.app=owner.app;self.canvas=canvas if canvas is not None else owner.canvases['tip']
         self.handles={};self.view=None;self.drag=None
+        self.canvas.bind('<ButtonPress-1>',self.press)
+        self.canvas.bind('<B1-Motion>',self.motion)
+        self.canvas.bind('<ButtonRelease-1>',self.release)
+        if canvas is not None:return
         box=ttk.LabelFrame(self.app.pages[3],text='Proposta dalla geometria dell’ala',padding=8)
         box.pack(fill='x',pady=(4,0),before=self.canvas)
         self.proposal_text=tk.StringVar()
@@ -52,9 +57,6 @@ class TipEditor:
         for key in ('span','root_chord','tip_chord','sweep','airfoil','airfoil_tip','planform',
                     'ellipse_center_perc','line_width','larghezza_linea_vaso','elliptical_tip'):
             self.app.vars[key].trace_add('write',self.update_suggestion)
-        self.canvas.bind('<ButtonPress-1>',self.press)
-        self.canvas.bind('<B1-Motion>',self.motion)
-        self.canvas.bind('<ButtonRelease-1>',self.release)
         self.update_suggestion()
 
     def update_suggestion(self,*_):
@@ -76,33 +78,37 @@ class TipEditor:
         self.app.vars['wing_center_line_perc'].set(f"{proposal['wing_center_line_perc']:g}")
         self.owner.draw('tip')
 
-    def draw(self,c,p,w,h):
-        self.handles={};self.update_suggestion()
+    def draw(self,c,p,w,h,trace_view=None):
+        self.handles={}
+        tracing=trace_view is not None
+        if not tracing:self.update_suggestion()
         body=planform_outline(p);high=dict(p,points=80);tip=[]
         chord,lead,_=planform_section(p,p['span'])
         if p['elliptical_tip']:
             edges=[]
-            for f,_ in smooth_tip_sections():
+            for f,_ in smooth_tip_sections(p):
                 xy=smooth_tip_profile(high,f,points=80)
                 edges.append((p['span']+p['tip_length']*f,min(x for x,y in xy),max(x for x,y in xy)))
             tip=[(z,a) for z,a,b in edges]+[(z,b) for z,a,b in reversed(edges)]
         outline=body+tip;xs=[x for z,x in outline];height_span=max(xs)-min(xs)
         total=p['span']+(p['tip_length'] if p['elliptical_tip'] else 0.)
-        if self.drag is None:
+        if tracing:
+            self.view=(trace_view.ox,trace_view.oy,trace_view.scale)
+        elif self.drag is None:
             left,top,right,bottom=30.,70.,w*.59-24,h-62.
             scale=min((right-left)/total,(bottom-top)/max(1.,height_span))
             self.view=(left+(right-left-total*scale)/2,top+(bottom-top-height_span*scale)/2-min(xs)*scale,scale)
         ox,oy,scale=self.view
         def xy(z,x):return ox+z*scale,oy+x*scale
         def coords(points):return [v for point in points for v in xy(*point)]
-        c.create_polygon(coords(body),fill='#dbeafe',outline='#2563eb',width=2,tags='tip_wing')
+        c.create_polygon(coords(body),fill='' if tracing else '#dbeafe',outline='#2563eb',width=2,tags='tip_wing')
         c.create_text(16,12,anchor='nw',text='Pianta nominale · Radice a sinistra, estremità a destra',fill='#475569')
-        self.owner.note(c,w*.61,12,'Sezioni della punta',w*.37)
+        if not tracing:self.owner.note(c,w*.61,12,'Sezioni della punta',w*.37)
         if not p['elliptical_tip']:
-            self.owner.note(c,w*.61,55,'Punta disattivata.\nAttivala per usare le maniglie e applicare la proposta geometrica.',w*.36)
+            self.owner.note(c,16 if tracing else w*.61,40 if tracing else 55,'Punta disattivata.\nAttivala per usare le maniglie e applicare la proposta geometrica.',w*.36)
             c.create_text(16,h-24,anchor='w',text='Ala orizzontale, nella stessa scala sui due assi · Vista senza washout.',fill='#64748b')
             return
-        c.create_polygon(coords(tip),fill='#fed7aa',outline='#ea580c',width=2,tags='tip_shape')
+        c.create_polygon(coords(tip),fill='' if tracing else '#fed7aa',outline='#ea580c',width=2,tags='tip_shape')
         c.create_line(*coords([(p['span'],lead),(p['span'],lead+chord)]),fill='#64748b',dash=(3,3),tags='tip_joint')
         axis=lead+chord*tip_center_percentage(p)/100
         vertex=(p['span']+p['tip_length'],axis)
@@ -118,6 +124,9 @@ class TipEditor:
         c.create_text(b[0]-8,b[1]-11,anchor='se',text=f"L {p['tip_length']:g} mm",fill='#059669')
         vx,vy=xy(*vertex)
         c.create_text(vx-8,vy+12,anchor='ne',text=f"Centro {tip_center_percentage(p):g}%",fill='#7c3aed')
+        if tracing:
+            c.create_text(16,h-23,anchor='w',text='Maniglia L: trascina in orizzontale · Centro: trascina in verticale.',fill='#475569')
+            return
         self.owner.note(c,w*.61,48,f"Lunghezza aggiuntiva: {p['tip_length']:g} mm\nLinea centrale: {tip_center_percentage(p):g}% dal bordo d’attacco",w*.36)
         sections=[]
         for f in (0.,.6,.9):

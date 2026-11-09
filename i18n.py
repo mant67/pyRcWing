@@ -1,5 +1,5 @@
 """Display-only Italian/English translation; configuration keys stay unchanged."""
-# File revision: 5
+# File revision: 12
 import re,functools
 import tkinter as tk
 from tkinter import messagebox,filedialog
@@ -159,6 +159,31 @@ Editor… => Editor…
 Editor profilo radice => Root airfoil editor
 Editor profilo estremità => Tip airfoil editor
 Libreria profili => Airfoil library
+Editor pianta… => Planform editor…
+Editor pianta alare => Wing planform editor
+Editor punta… => Wingtip editor…
+Editor punta alare => Wingtip editor
+Editor alettone… => Aileron editor…
+Editor alettone => Aileron editor
+Sfondo condiviso da Geometria. Trascina le maniglie per modificare il componente. => Background shared from Geometry. Drag the handles to edit the component.
+Libreria piante => Planform library
+Salva pianta => Save planform
+Nome della pianta: => Planform name:
+Sostituire la pianta già salvata? => Replace the saved planform?
+Pianta salvata nella libreria. => Planform saved to the library.
+Note della pianta => Planform notes
+Modifica pianta => Edit planform
+Inserisci nodo => Insert node
+Elimina nodo => Delete node
+Ripristina pianta iniziale => Reset to initial planform
+Ripristina vista => Reset view
+Tangente terminale automatica => Automatic tip tangent
+Rotella e trascinamento spostano la vista. Con Maiusc agiscono solo sullo sfondo. Tasto destro sul bordo blu per aggiungere un nodo. => Scroll to zoom and drag to pan. Hold Shift to affect only the background. Right-click a blue edge to add a node.
+Importa immagine della pianta => Import planform image
+Tasto destro sul bordo blu per inserire un nodo. Trascina le maniglie per modificare la pianta. => Right-click a blue edge to insert a node. Drag the handles to edit the planform.
+Semiala (mm) => Half-span (mm)
+Freccia (mm) => Sweep (mm)
+Centro ellisse (%) => Ellipse centre (%)
 Salva profilo => Save airfoil
 Chiudi e applica => Close and apply
 Note del profilo => Airfoil notes
@@ -167,6 +192,9 @@ Profilo alare => Airfoil
 Profilo salvato nella libreria. => Airfoil saved to the library.
 Calibra => Calibrate
 Rimuovi immagine => Remove image
+Blocca sfondo => Lock background
+Sblocca sfondo => Unlock background
+Sfondo bloccato. Le maniglie restano modificabili. => Background locked. The handles remain editable.
 Carica immagine… => Load image…
 Ruota => Rotate
 Fine rotazione => Finish rotation

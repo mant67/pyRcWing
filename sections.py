@@ -1,5 +1,5 @@
 """Anteprime nominali X/Z e sezionatura CAD, compatibili con la punta parametrica."""
-# File revision: 2
+# File revision: 3
 import copy
 import json
 import math
@@ -71,6 +71,9 @@ def section_preview(params,component):
     else:
         v=vase_parameters(p);te=max(.9,2*v['larghezza_linea_vaso'])
         zs=planform_stations(p)
+        a=aileron_parameters(p)
+        hinge,hinge_levels=aileron_hinge(p,a) if a else (None,())
+        zs.extend(z for z in hinge_levels if z<p['span'])
         washout=washout_parameters(p)
         if washout['washout_deg']:
             start=washout['washout_start']
@@ -82,20 +85,16 @@ def section_preview(params,component):
         if tip:
             scale_end=2*v['larghezza_linea_vaso']/(p['tip_chord']*profile_thickness_ratio(p,'tip'))
             if scale_end>=.9:raise ValueError('Punta incompatibile con il profilo e la larghezza linea.')
-            for fraction,scale in smooth_tip_sections()[1:]:
+            fractions={fraction for fraction,_ in smooth_tip_sections(p)[1:]}
+            fractions.update((z-p['span'])/tip_length for z in hinge_levels if p['span']<z<p['span']+tip_length)
+            for fraction in sorted(fractions):
                 rings.append([(x,y,p['span']+tip_length*fraction) for x,y in smooth_tip_profile(p,fraction,points)])
-        faces=ring_faces(rings);a=aileron_parameters(p)
+        faces=ring_faces(rings)
         if component=='alettone' and not a:raise ValueError('Attiva l’alettone nel relativo passo.')
         if a:
             start=a['inizio_alettone'];end=start+a['lunghezza_alettone'];gap=a['gioco_alettone'];axial=aileron_axial_bounds(a)
-            hinge=[]
-            for z,width in ((start,a['larghezza_alettone_radice']),(end,a['larghezza_alettone_estremita'])):
-                chord,lead,_=wing_section_at(p,z)
-                if width+2*p['skin']+gap>=chord:raise ValueError('Alettone troppo largo rispetto alla corda locale.')
-                x=lead+chord-width
-                hinge.append((x,upper_surface_at(p,z,x)))
-            def hx(z):return hinge[0][0]+(hinge[1][0]-hinge[0][0])*(z-start)/(end-start)
-            def hy(z):return hinge[0][1]+(hinge[1][1]-hinge[0][1])*(z-start)/(end-start)
+            def hx(z):return hinge(z)[0]
+            def hy(z):return hinge(z)[1]
             clipped=[]
             for face in faces:
                 if component=='alettone':

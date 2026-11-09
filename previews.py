@@ -1,12 +1,16 @@
 """Anteprime 2D leggere del wizard; nessuna modifica ai solidi esportati."""
+# File revision: 7
 import math
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
+from airfoil_editor import AirfoilEditor, read_preferences
 from core import *
+from planform import PLANFORM_EDGES, insert_curve_node, node_handle_lengths, with_node_stations
+from planform_ui import draw_node_tangent, local_slope, move_tangent_handle
 from sections import section_preview, clip_polygon
 from tip_ui import TipEditor
 from spars_ui import SparEditor
-from aileron_ui import AileronEditor
+from aileron_ui import AileronEditor, HorizontalView
 from slots_ui import SlotsPreview
 
 
@@ -31,6 +35,303 @@ class View:
     def text(self,x,z,text,**kwargs):return self.canvas.create_text(*self.xy(x,z),text=text,**kwargs)
 
 
+class ComponentTracingEditor(AirfoilEditor):
+    """Component handles over the saved planform background, in millimetres."""
+    def __init__(self,owner,key):
+        super().__init__(owner.app,key)
+        self.owner=owner
+        self.key=key
+        self.note=owner.note
+
+    def open(self):
+        if self.app.generating:return
+        if self.window is not None and self.window.winfo_exists():
+            self.window.lift()
+            return
+        self.image=None
+        self.photo=None
+        self.photo_key=None
+        title='Editor punta alare' if self.key=='tip' else 'Editor alettone'
+        self.window=tk.Toplevel(self.app)
+        self.window.title(self.app.tr(title))
+        self.window.geometry('940x700')
+        self.window.minsize(640,430)
+        self.window.transient(self.app)
+        self.window.protocol('WM_DELETE_WINDOW',self.close)
+        self.window.bind('<Escape>',lambda _event:self.close())
+        bar=ttk.Frame(self.window,padding=8)
+        bar.pack(fill='x')
+        ttk.Label(bar,text='Sfondo condiviso da Geometria. Trascina le maniglie per modificare il componente.').pack(side='left')
+        ttk.Button(bar,text='Chiudi e applica',command=self.close).pack(side='right')
+        self.canvas=tk.Canvas(self.window,background='white',highlightthickness=1,highlightbackground='#94a3b8')
+        self.canvas.pack(fill='both',expand=True,padx=10,pady=(0,10))
+        editor_class=TipEditor if self.key=='tip' else AileronEditor
+        self.editor=editor_class(self,canvas=self.canvas)
+        self.trace_view=None
+        self.view_zoom=1.
+        self.view_offset=(0.,0.)
+        self.view_drag=None
+        self.node_handles={}
+        self.node_edges=[]
+        self.node_drag=None
+        self.selected_node=None
+        self.tangent_grips={}
+        self.node_key=f'{self.key}_nodes'
+        self.image_menu=tk.Menu(self.window,tearoff=False)
+        self.canvas.bind('<Button-3>',self.show_image_menu)
+        self.canvas.bind('<ButtonPress-1>',self.press)
+        self.canvas.bind('<B1-Motion>',self.motion)
+        self.canvas.bind('<ButtonRelease-1>',self.release)
+        self.canvas.bind('<MouseWheel>',self.zoom_view)
+        try:
+            path=self.app.planform_editor.tracing_editor.preferences_path
+            background=read_preferences(path).get('background')
+            if background:self.restore_background(background)
+        except FileNotFoundError:
+            pass
+        except (OSError,ValueError,TypeError,KeyError,AttributeError) as exc:
+            messagebox.showwarning('Immagine',str(exc),parent=self.window)
+        self.image_locked=True
+        self.canvas.bind('<Configure>',lambda _event:self.draw())
+        self.window.grab_set()
+        self.draw()
+
+    def close(self):
+        self.window.destroy()
+        self.owner.draw(self.key)
+        self.app.refresh_summary()
+
+    def chord(self):
+        return 1.
+
+    def params(self):
+        return self.owner.params()
+
+    def transform(self):
+        return self.trace_view.ox,self.trace_view.oy,self.trace_view.scale
+
+    def draw(self,_key=None):
+        c=self.canvas
+        c.delete('all')
+        self.editor.handles={}
+        self.node_handles={}
+        self.node_edges=[]
+        self.tangent_grips={}
+        w=max(640,c.winfo_width())
+        h=max(380,c.winfo_height())
+        try:
+            p=self.params()
+            edges=self.component_edges(p)
+            if (self.editor.drag is None and self.node_drag is None) or self.trace_view is None:
+                outline=[(x,z) for z,x in planform_outline(p)]
+                outline.extend((x,z) for edge in edges for _,x,z in edge)
+                if p['elliptical_tip']:
+                    chord,lead,_=planform_section(p,p['span'])
+                    outline.append((lead+chord*tip_center_percentage(p)/100,p['span']+p['tip_length']))
+                self.trace_view=HorizontalView((64,68,w-55,h-65),outline)
+                self.trace_view.ox=self.trace_view.ox*self.view_zoom+self.view_offset[0]
+                self.trace_view.oy=self.trace_view.oy*self.view_zoom+self.view_offset[1]
+                self.trace_view.scale*=self.view_zoom
+            self.draw_background(c.winfo_width(),c.winfo_height())
+            self.editor.draw(c,p,w,h,trace_view=self.trace_view)
+            self.node_edges=edges
+            if self.key=='aileron' and edges:
+                c.create_line(*[value for _,x,z in edges[0] for value in self.trace_view.xy(x,z)],
+                              fill='#c2410c',width=2,tags='aileron_editable_edge')
+            for side,nodes in enumerate(planform_nodes(p.get(self.node_key,''))):
+                if side>=len(edges):break
+                for index,node in enumerate(nodes):
+                    fraction=node[0]
+                    point=min(edges[side],key=lambda point:abs(point[0]-fraction))
+                    x,y=self.trace_view.xy(*point[1:])
+                    self.node_handles[(side,index)]=(x,y)
+                    c.create_oval(x-6,y-6,x+6,y+6,fill='#ea580c',outline='#fff',width=2)
+            if self.key=='tip' and self.selected_node in self.node_handles:
+                side,index=self.selected_node
+                nodes=planform_nodes(p.get(self.node_key,''))[side]
+                fraction=nodes[index][0]
+                base=local_slope(lambda f:self.tip_base_edge(p,side,f),fraction)
+                slope=base+curve_offset(nodes,fraction)[1]
+                self.tangent_grips=draw_node_tangent(c,self.node_handles[self.selected_node],slope,
+                    p['tip_length'],self.trace_view.scale,node_handle_lengths(nodes,index))
+        except (ValueError,TypeError,KeyError,ZeroDivisionError,OverflowError) as exc:
+            self.note(c,16,48,str(exc),w-32,color='#b91c1c')
+
+    def component_edges(self,p):
+        if self.key=='tip':
+            if not p['elliptical_tip']:return []
+            edges=[[],[]]
+            for fraction,_ in smooth_tip_sections(p):
+                xy=smooth_tip_profile(p,fraction,points=80)
+                z=p['span']+p['tip_length']*fraction
+                xs=[x for x,_ in xy]
+                for edge,x in zip(edges,(min(xs),max(xs))):edge.append((fraction,x,z))
+            return edges
+        a=aileron_parameters(p)
+        if not a:return []
+        hinge,_=aileron_hinge(p,a)
+        start=a['inizio_alettone'];length=a['lunghezza_alettone']
+        bounds=aileron_axial_bounds(a)
+        nodes=planform_nodes(p.get(self.node_key,''))[0]
+        levels={bounds['part_start'],bounds['part_end'],*(start+node[0]*length for node in nodes)}
+        return [[((z-start)/length,hinge(z)[0]+a['gioco_alettone']/2,z) for z in sorted(levels)]]
+
+    def nearest_node(self,target):
+        key=min(self.node_handles,key=lambda k:math.dist(target,self.node_handles[k]),default=None)
+        return key if key is not None and math.dist(target,self.node_handles[key])<=12 else None
+
+    def edge_hit(self,target):
+        nodes=planform_nodes(self.app.vars[self.node_key].get())
+        best=(12.,None)
+        for side,edge in enumerate(self.node_edges):
+            if len(nodes[side])>=64:continue
+            for (f,x,z),(g,u,v) in zip(edge,edge[1:]):
+                a=self.trace_view.xy(x,z);b=self.trace_view.xy(u,v)
+                dx,dy=b[0]-a[0],b[1]-a[1]
+                norm=dx*dx+dy*dy
+                if not norm:continue
+                t=max(0.,min(1.,((target[0]-a[0])*dx+(target[1]-a[1])*dy)/norm))
+                distance=math.dist(target,(a[0]+dx*t,a[1]+dy*t))
+                fraction=f+(g-f)*t
+                existing=(0.,1.,*(node[0] for node in nodes[side]))
+                if distance<best[0] and 0<fraction<1 and all(abs(fraction-v)>.001 for v in existing):
+                    best=(distance,(side,fraction))
+        return best[1]
+
+    def show_image_menu(self,event):
+        menu=self.image_menu
+        menu.delete(0,'end')
+        for label in ('Carica immagine…','Sblocca sfondo','Ruota','Calibra','Rimuovi immagine',
+                      'Modifica pianta','Ripristina pianta iniziale'):
+            menu.add_command(label=self.app.tr(label),state='disabled')
+        menu.add_separator()
+        menu.add_command(label=self.app.tr('Ripristina vista'),command=self.reset_view)
+        menu.add_separator()
+        target=event.x,event.y
+        node=self.nearest_node(target)
+        hit=self.edge_hit(target) if node is None else None
+        menu.add_command(label=self.app.tr('Inserisci nodo'),state='normal' if hit else 'disabled',
+                         command=lambda:self.insert_node(*hit))
+        menu.add_command(label=self.app.tr('Elimina nodo'),state='normal' if node is not None else 'disabled',
+                         command=lambda:self.delete_node(node))
+        try:menu.tk_popup(event.x_root,event.y_root)
+        finally:menu.grab_release()
+
+    def save_nodes(self,nodes):
+        raw=json.dumps(dict(zip(PLANFORM_EDGES,nodes)),separators=(',',':')) if any(nodes) else ''
+        p=dict(self.params(),**{self.node_key:raw})
+        try:
+            if self.key=='tip':
+                for fraction,_ in smooth_tip_sections(p):smooth_tip_profile(p,fraction,points=80)
+            else:aileron_hinge(p,aileron_parameters(p))
+        except ValueError as exc:
+            self.canvas.delete('node_error')
+            self.canvas.create_text(16,42,anchor='nw',text=str(exc),fill='#b91c1c',tags='node_error')
+            return
+        self.app.vars[self.node_key].set(raw)
+        self.draw()
+
+    def insert_node(self,side,fraction):
+        nodes=[list(edge) for edge in planform_nodes(self.app.vars[self.node_key].get())]
+        if self.key=='tip':
+            nodes[side]=insert_curve_node(nodes[side],fraction)
+            self.selected_node=(side,next(i for i,node in enumerate(nodes[side]) if node[0]==fraction))
+        else:
+            nodes[side].append((fraction,edge_offset(nodes[side],fraction)))
+            nodes[side].sort()
+        self.save_nodes(nodes)
+
+    def delete_node(self,node):
+        nodes=[list(edge) for edge in planform_nodes(self.app.vars[self.node_key].get())]
+        side,index=node
+        del nodes[side][index]
+        self.selected_node=None
+        self.save_nodes(nodes)
+
+    def zoom_view(self,event):
+        if self.view_drag is not None or self.node_drag is not None or self.editor.drag is not None:
+            return
+        steps=max(-10.,min(10.,event.delta/120))
+        zoom=max(.2,min(12.,self.view_zoom*1.2**steps))
+        ratio=zoom/self.view_zoom
+        x,y=self.view_offset
+        self.view_offset=(event.x+(x-event.x)*ratio,event.y+(y-event.y)*ratio)
+        self.view_zoom=zoom
+        self.draw()
+
+    def reset_view(self):
+        self.view_zoom=1.
+        self.view_offset=(0.,0.)
+        self.draw()
+
+    def press(self,event):
+        for direction,grip in self.tangent_grips.items():
+            distance=math.dist((event.x,event.y),grip)
+            if distance<=10 and distance<math.dist((event.x,event.y),self.node_handles[self.selected_node]):
+                p=self.params()
+                self.node_drag=(('tangent',self.selected_node,direction),event.x,event.y,p,planform_nodes(p.get(self.node_key,'')))
+                return
+        node=self.nearest_node((event.x,event.y))
+        if node is None:
+            self.editor.press(event)
+            if self.editor.drag is None:
+                self.view_drag=(event.x,event.y,*self.view_offset)
+            return
+        p=self.params()
+        self.selected_node=node
+        self.node_drag=(node,event.x,event.y,p,planform_nodes(p.get(self.node_key,'')))
+        self.draw()
+
+    @staticmethod
+    def tip_base_edge(p,side,fraction):
+        xs=[x for x,_ in base_smooth_tip_profile(p,fraction,points=80)]
+        return max(xs) if side else min(xs)
+
+    def motion(self,event):
+        if self.view_drag is not None:
+            x,y,offset_x,offset_y=self.view_drag
+            self.view_offset=(offset_x+event.x-x,offset_y+event.y-y)
+            self.draw()
+            return
+        if self.node_drag is None:
+            self.editor.motion(event)
+            return
+        key,x,y,p,original=self.node_drag
+        nodes=[list(edge) for edge in original]
+        if key[0]=='tangent':
+            _,selected,direction=key
+            side,index=selected
+            fraction=nodes[side][index][0]
+            base=local_slope(lambda f:self.tip_base_edge(p,side,f),fraction)
+            nodes[side][index]=move_tangent_handle(nodes[side],index,self.node_handles[selected],
+                event,direction,p['tip_length'],self.trace_view.scale,base)
+            self.save_nodes(nodes)
+            return
+        side,index=key
+        fraction,offset,*tangent=nodes[side][index]
+        scale=self.trace_view.scale
+        if self.key=='tip':
+            length=p['tip_length']
+            def baseline(f):return self.tip_base_edge(p,side,f)
+        else:
+            a=aileron_parameters(p);start,length=a['inizio_alettone'],a['lunghezza_alettone']
+            hinge,_=aileron_hinge(dict(p,aileron_nodes=''),a)
+            def baseline(f):return hinge(start+length*f)[0]
+        low=nodes[side][index-1][0] if index else 0.
+        high=nodes[side][index+1][0] if index+1<len(nodes[side]) else 1.
+        f=max(low+.0001,min(high-.0001,fraction+(event.x-x)/scale/length))
+        nodes[side][index]=(f,offset+baseline(fraction)-baseline(f)+(event.y-y)/scale,*tangent)
+        self.save_nodes(nodes)
+
+    def release(self,event):
+        if self.view_drag is not None:
+            self.view_drag=None
+        elif self.node_drag is not None:
+            self.node_drag=None
+            self.draw()
+        else:self.editor.release(event)
+
+
 class WizardPreviews:
     def __init__(self,app):
         self.app=app;self.canvases={};self.pending=None;self.traced=set();self.last_error={}
@@ -44,6 +345,12 @@ class WizardPreviews:
         self.tip_editor=TipEditor(self)
         self.spar_editor=SparEditor(self)
         self.aileron_editor=AileronEditor(self)
+        self.component_tracers={}
+        for key,index,label in (('tip',3,'Editor punta…'),('aileron',5,'Editor alettone…')):
+            tracer=ComponentTracingEditor(self,key)
+            self.component_tracers[key]=tracer
+            ttk.Button(app.pages[index],text=label,command=tracer.open).pack(
+                anchor='w',pady=(6,0),before=self.canvases[key])
         self.slots_preview=SlotsPreview(self)
         self.sync_traces()
 
@@ -101,11 +408,11 @@ class WizardPreviews:
 
     def outline(self,p):
         high=dict(p,points=80);rings=[]
-        for i in range(25):
-            z=p['span']*i/24;ch,lead,_=planform_section(p,z)
+        for z in with_node_stations(p,[p['span']*i/24 for i in range(25)]):
+            ch,lead,_=planform_section(p,z)
             rings.append((z,[(lead+x*ch,y*ch) for x,y in section_profile(high,z)]))
         if p['elliptical_tip']:
-            for f,_ in smooth_tip_sections()[1:]:rings.append((p['span']+p['tip_length']*f,smooth_tip_profile(high,f)))
+            for f,_ in smooth_tip_sections(p)[1:]:rings.append((p['span']+p['tip_length']*f,smooth_tip_profile(high,f)))
         edges=[]
         for z,profile in rings:
             xs=[washout_point(p,(x,y,z))[0] for x,y in profile]

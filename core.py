@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pyRcWing v9.1.1 — motore geometrico
-# File revision: 1
+# File revision: 4
 # Generazione STL con solidi CAD e unioni booleane; non usa OpenSCAD.
 # Dipendenza: cadquery (installare con: py -m pip install cadquery)
 import math, os
@@ -17,7 +17,7 @@ from servo import SERVO_PRESETS, SERVO_DEFAULTS, servo_parameters, servo_layout,
 
 from lightening import oval_parameters, rib_ovals, verify_oval_export, wing_mirrored_enabled
 
-from planform import elliptical_planform, planform_parameters, planform_section, planform_stations, planform_outline
+from planform import curve_offset, curve_stations, edge_offset, elliptical_planform, node_fractions, planform_nodes, planform_parameters, planform_section, planform_stations, planform_outline
 
 from spars import spar_automatic, legacy_spar_angle, spar_axis, has_manual_spar_angles
 from airfoil_editor import profile_from_controls
@@ -295,9 +295,13 @@ def vase_tip_sections(terminal_scale):
             for value in sorted(set(fractions))]
 
 
-def smooth_tip_sections():
+def smooth_tip_sections(params=None):
     # Passi angolari uniformi evitano ripiegamenti del loft vicino all'apice.
-    return [(math.sin(math.pi*i/64),math.cos(math.pi*i/64)) for i in range(33)]
+    samples=[(math.sin(math.pi*i/64),math.cos(math.pi*i/64)) for i in range(33)]
+    nodes=curve_stations(planform_nodes((params or {}).get('tip_nodes','')))
+    if not nodes:return samples
+    return sorted([*(item for item in samples if all(abs(item[0]-f)>1e-7 for f in nodes)),
+                   *((f,math.sqrt(1-f*f)) for f in nodes)])
 
 
 
@@ -321,6 +325,19 @@ def elliptical_tip_scale(params,fraction):
 
 
 def smooth_tip_profile(params,fraction,points=None):
+    xy=base_smooth_tip_profile(params,fraction,points)
+    leading,trailing=planform_nodes(params.get('tip_nodes',''))
+    left=curve_offset(leading,fraction)[0]
+    right=curve_offset(trailing,fraction)[0]
+    if left==right==0:return xy
+    low=min(x for x,y in xy);high=max(x for x,y in xy)
+    width=high-low
+    if width+right-left<=.1:raise ValueError('I bordi della punta si incrociano o la sezione è troppo sottile.')
+    ratio=(width+right-left)/width
+    return [(low+left+(x-low)*ratio,y*ratio) for x,y in xy]
+
+
+def base_smooth_tip_profile(params,fraction,points=None):
     """Punta NACA, raccordo tangente iniziale e calotta tonda verso un vertice."""
     n=points or max(80,params['points']);p=dict(params,points=n)
     f=max(0.,min(1.,fraction));scale=math.sqrt(max(0.,1-f*f))
@@ -364,7 +381,7 @@ def make_smooth_tip(cq,params):
     builder=BRepOffsetAPI_ThruSections(True,False,1e-7);builder.SetMaxDegree(3)
     builder.CheckCompatibility(False)
     length=tip_parameters(params)[1]
-    for fraction,scale in smooth_tip_sections():
+    for fraction,scale in smooth_tip_sections(params):
         if fraction>=1:continue
         xy=smooth_tip_profile(params,fraction)
         builder.AddWire(smooth_profile_wire(cq,params['span']+length*fraction,xy).wrapped)
@@ -488,6 +505,10 @@ def wing_section_at(params,z):
     length=tip_parameters(params)[1]
     if length <= 0: raise ValueError("Alettone fuori dalla semiala.")
     u=(z-span)/length
+    if params.get('tip_nodes') and 0<=u<=1:
+        xs=[x for x,_ in smooth_tip_profile(params,u)]
+        width=max(xs)-min(xs)
+        return width,min(xs),width/ct
     levels=[(math.sin(math.pi*i/32), math.cos(math.pi*i/32)) for i in range(17)]
     scale=0.
     for (za,sa),(zb,sb) in zip(levels,levels[1:]):
@@ -505,14 +526,17 @@ def wing_section_at(params,z):
 
 
 def upper_surface_at(params,z,x):
-    chord,lead,scale=wing_section_at(params,z)
-    te=max(.9,2*params['line_width'])*(scale if z>params['span'] else 1.)
-    profile=section_profile(params,z,te/max(chord,1e-6))
+    if params.get('tip_nodes') and z>params['span']:
+        length=tip_parameters(params)[1]
+        profile=smooth_tip_profile(params,(z-params['span'])/length)
+    else:
+        chord,lead,scale=wing_section_at(params,z)
+        te=max(.9,2*params['line_width'])*(scale if z>params['span'] else 1.)
+        profile=[(lead+px*chord,py*chord) for px,py in section_profile(params,z,te/max(chord,1e-6))]
     heights=[]
-    for (xa,ya),(xb,yb) in zip(profile,profile[1:]+profile[:1]):
-        a,b=lead+xa*chord,lead+xb*chord
+    for (a,ya),(b,yb) in zip(profile,profile[1:]+profile[:1]):
         if min(a,b)-1e-8 <= x <= max(a,b)+1e-8 and abs(a-b)>1e-10:
-            heights.append((ya+(yb-ya)*(x-a)/(b-a))*chord)
+            heights.append(ya+(yb-ya)*(x-a)/(b-a))
     if not heights: raise ValueError("Bordo di cerniera esterno al profilo alare.")
     return max(heights)
 
@@ -696,12 +720,9 @@ def hinge_approach_cutters(cq,params,a,slot_details,hinge,gap):
     return cutters
 
 
-def aileron_regions(cq,params,envelope):
-    """Regioni comuni ai due corpi: vano ala e alettone smussato."""
-    p=aileron_parameters(params)
-    if p is None:raise ValueError('Attiva Crea alettone separato.')
+def aileron_hinge(params,p):
     start=p['inizio_alettone'];end=start+p['lunghezza_alettone']
-    gap=p['gioco_alettone'];skin=params['skin'];angle=math.tan(math.radians(p['angolo_smusso_alettone']))
+    gap=p['gioco_alettone'];skin=params['skin']
     hinges=[]
     for z,width in ((start,p['larghezza_alettone_radice']),(end,p['larghezza_alettone_estremita'])):
         chord,lead,_=wing_section_at(params,z)
@@ -709,14 +730,42 @@ def aileron_regions(cq,params,envelope):
             raise ValueError("Larghezza alettone eccessiva rispetto alla corda locale, soprattutto vicino alla punta.")
         x=lead+chord-width
         hinges.append((x,upper_surface_at(params,z,x)))
-    def hinge(z):
+    def base_hinge(z):
         f=(z-start)/(end-start)
         return tuple(a+(b-a)*f for a,b in zip(hinges[0],hinges[1]))
+    nodes=planform_nodes(params.get('aileron_nodes',''))[0]
+    levels=[]
+    for node in nodes:
+        fraction,offset=node[:2]
+        z=start+(end-start)*fraction
+        x,y=base_hinge(z)
+        chord,lead,_=wing_section_at(params,z)
+        if not lead+2*skin+gap<x+offset<lead+chord-gap/2:
+            raise ValueError('Nodo alettone fuori dalla corda utile.')
+        if offset:y+=upper_surface_at(params,z,x+offset)-upper_surface_at(params,z,x)
+        levels.append((z,x+offset,y))
+    if not levels:return base_hinge,()
+    controls=[(start,*hinges[0]),*levels,(end,*hinges[1])]
+    def hinge(z):
+        if z<=start or z>=end:return base_hinge(z)
+        for (lo,x0,y0),(hi,x1,y1) in zip(controls,controls[1:]):
+            if z<=hi:
+                f=(z-lo)/(hi-lo)
+                return x0+(x1-x0)*f,y0+(y1-y0)*f
+    return hinge,tuple(z for z,_,_ in levels)
+
+
+def aileron_regions(cq,params,envelope):
+    """Regioni comuni ai due corpi: vano ala e alettone smussato."""
+    p=aileron_parameters(params)
+    if p is None:raise ValueError('Attiva Crea alettone separato.')
+    gap=p['gioco_alettone'];angle=math.tan(math.radians(p['angolo_smusso_alettone']))
+    hinge,levels=aileron_hinge(params,p)
     bounds=envelope.BoundingBox();margin=max(bounds.xlen,bounds.ylen,params['span'])+10
     xmax=bounds.xmax+margin;ymin=bounds.ymin-max(5,bounds.ylen);ymax=bounds.ymax+max(5,bounds.ylen)
     def region(z0,z1,offset,bevel=False):
         wires=[]
-        for z in (z0,z1):
+        for z in (z0,*(z for z in levels if z0<z<z1),z1):
             x,y=hinge(z);x+=offset
             points=[(x,ymax),(x,y),(x+angle*(y-ymin) if bevel else x,ymin),(xmax,ymin),(xmax,ymax)]
             wires.append(cq.Wire.makePolygon([cq.Vector(a,b,z) for a,b in points],close=True))
@@ -1291,7 +1340,7 @@ def build_spiral_vase_wing(params,progress=None):
         else:wires.append(make_section_wire(cq,z,chord,lead,params['airfoil'],points,trailing_edge_thickness=te,profile=section_profile(params,z,te/chord)))
         floors.append(floor_wire(z,chord,lead))
     if tip_enabled:
-        zs=[span+tip_length*fraction for fraction,_ in smooth_tip_sections() if fraction>0]
+        zs=[span+tip_length*fraction for fraction,_ in smooth_tip_sections(params) if fraction>0]
         zs.extend((total-3*v['larghezza_linea_vaso'],total-1.5*v['larghezza_linea_vaso'],total+v['larghezza_linea_vaso']))
         for z in sorted(set(value for value in zs if value>span+1e-7)):
             f=min(1.,(z-span)/tip_length)
@@ -1299,7 +1348,7 @@ def build_spiral_vase_wing(params,progress=None):
             scale=math.sqrt(max(tip_scale**2,1-(1-tip_scale**2)*mapped*mapped))
             floors.append(floor_wire(z,ct*scale,planform_section(params,span)[1]+ct*(1-scale)*tip_center_percentage(params)/100,scale))
     if progress:progress("Spiral Vase: solido nominale e fondo delle fessure…")
-    outer=cq.Solid.makeLoft(wires,ruled=not tip_enabled)
+    outer=cq.Solid.makeLoft(wires,ruled=not tip_enabled or bool(node_fractions(params)))
     if tip_enabled:
         if progress:progress("Spiral Vase: punta ellittica nominale e fondo rastremato delle nervature…")
         tip_params=dict(params,skin=ligament/2,line_width=v['larghezza_linea_vaso'])

@@ -1,6 +1,6 @@
 from mesh_checks import final_mesh_checks
 """Wizard di configurazione; la geometria risiede nel modulo core v91."""
-# File revision: 1
+# File revision: 3
 import tkinter as tk
 import copy
 from tkinter import ttk, filedialog, messagebox
@@ -74,6 +74,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             (right,"Altezza ovale (mm)","hole_height","10"),
         ]
         self.vars={'custom_airfoil_root':tk.StringVar(value=''),'custom_airfoil_tip':tk.StringVar(value='')}
+        for key in ('tip_nodes','aileron_nodes'):self.vars[key]=tk.StringVar()
         self.airfoil_editors={'airfoil':AirfoilEditor(self,'root'),'airfoil_tip':AirfoilEditor(self,'tip')}
         self.geometry_labels={}
         self.vars['create_ribs']=tk.StringVar(value='1')
@@ -339,6 +340,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             if not all(math.isfinite(v) and v>0 for v in (root_chord,tip_chord)):
                 raise ValueError('Le corde di radice ed estremità devono essere positive e finite.')
             shape=dict(p,root_chord=root_chord,tip_chord=tip_chord,sweep=0.,planform=self.vars['planform'].get() if 'planform' in self.vars else 'trapezoidal')
+            if 'planform_nodes' in self.vars:shape['planform_nodes']=self.vars['planform_nodes'].get()
             chords=[planform_section(shape,f)[0] for f in (0.,.5,1.)]
             profiles=[[(x*chord,y*chord) for x,y in section_profile(p,f)]
                       for f,chord in zip((0.,.5,1.),chords)]

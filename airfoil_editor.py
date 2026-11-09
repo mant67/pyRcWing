@@ -1,5 +1,5 @@
 """Interactive root/tip airfoil editor with spline handles and calibrated raster tracing."""
-# File revision: 5
+# File revision: 10
 import base64
 import io
 import json
@@ -15,7 +15,18 @@ HANDLE_X=(0.,.025,.07,.15,.28,.45,.65,.82,1.)
 DEFAULT_NACA='2412'
 NACA_LIBRARY=('0006','0009','0010','0012','0015','0018','0021','0024',
               '1408','1412','2309','2408','2410','2412','2415','2418','4412','4415','4418','6409')
-LIBRARY_PATH=Path(__file__).with_name('airfoil_profiles.json')
+PREFERENCES_DIR=Path(__file__).resolve().parent/'preferences'
+LIBRARY_PATH=PREFERENCES_DIR/'airfoil_profiles.json'
+
+
+def read_preferences(path):
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        # Older installations saved these files next to the scripts.
+        if path.parent!=PREFERENCES_DIR:raise
+        legacy=PREFERENCES_DIR.parent/path.name
+        return json.loads(legacy.read_text(encoding='utf-8'))
 
 
 def _interp(points,x):
@@ -94,6 +105,18 @@ def profile_from_controls(raw,n=80,trailing_edge_ratio=0.):
 
 
 class AirfoilEditor:
+    library_label='Libreria profili'
+    save_label='Salva profilo'
+    name_label='Nome del profilo:'
+    replace_label='Sostituire il profilo già salvato?'
+    saved_label='Profilo salvato nella libreria.'
+    notes_label='Note del profilo'
+    geometry_label='Profilo alare'
+    edit_label='Modifica profilo'
+    reset_label='Ripristina NACA'
+    image_title='Importa immagine del profilo'
+    edit_status='Trascina le maniglie per modificare il profilo o lo sfondo per spostarlo.'
+
     def __init__(self,app,side):
         self.app=app;self.side=side
         self.code_key='airfoil' if side=='root' else 'airfoil_tip'
@@ -109,7 +132,9 @@ class AirfoilEditor:
         self.pivot_drag=None
         self.calibration_mm=None
         self.calibration_reference=[]
+        self.image_locked=False
         self.preferences_path=LIBRARY_PATH.with_name(f'airfoil_editor_{side}.json')
+        self.library_path=LIBRARY_PATH
 
     def save_editor_settings(self):
         data={'geometry':self.window.wm_geometry(),'mode':self.mode}
@@ -122,11 +147,13 @@ class AirfoilEditor:
                 'png':base64.b64encode(buffer.getvalue()).decode('ascii'),
                 'scale':self.image_scale,'mm_per_pixel':mm_per_pixel,
                 'origin':self.image_origin,'angle':self.image_angle,'pivot':self.image_pivot,
+                'locked':self.image_locked,
                 'calibration_mm':self.calibration_mm,'reference':self.calibration_reference,
                 'pending_points':self.calibration,
             }
         temporary=None
         try:
+            self.preferences_path.parent.mkdir(parents=True,exist_ok=True)
             with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=self.preferences_path.parent,delete=False) as stream:
                 temporary=Path(stream.name)
                 json.dump(data,stream,allow_nan=False)
@@ -136,12 +163,19 @@ class AirfoilEditor:
 
     def restore_editor_settings(self):
         try:
-            data=json.loads(self.preferences_path.read_text(encoding='utf-8'))
+            data=read_preferences(self.preferences_path)
         except FileNotFoundError:
             return
         self.window.geometry(data.get('geometry','940x700'))
         background=data.get('background')
         if not background:return
+        self.restore_background(background)
+        mode=data.get('mode','edit')
+        self.set_mode(mode if mode in ('edit','rotate','calibrate') else 'edit')
+        if self.mode=='calibrate':
+            self.calibration=background.get('pending_points',[])[:1]
+
+    def restore_background(self,background):
         from PIL import Image
         origin=[float(value) for value in background['origin']]
         scale=float(background['scale'])
@@ -162,16 +196,13 @@ class AirfoilEditor:
         self.image_scale=scale
         self.image_angle=angle
         self.image_pivot=pivot
+        self.image_locked=background.get('locked') is True
         self.calibration_mm=background.get('calibration_mm')
         self.calibration_reference=background.get('reference',[])
-        mode=data.get('mode','edit')
-        self.set_mode(mode if mode in ('edit','rotate','calibrate') else 'edit')
-        if self.mode=='calibrate':
-            self.calibration=background.get('pending_points',[])[:1]
 
     def read_library(self):
         try:
-            data=json.loads(LIBRARY_PATH.read_text(encoding='utf-8'))
+            data=read_preferences(self.library_path)
         except FileNotFoundError:
             return {}
         if not isinstance(data,dict):
@@ -239,11 +270,11 @@ class AirfoilEditor:
         self.picker.configure(values=[*(f'NACA {code}' for code in codes),*self.library_choices])
 
     def save_profile(self):
-        name=simpledialog.askstring(self.app.tr('Salva profilo'),self.app.tr('Nome del profilo:'),initialvalue=self.profile_name,parent=self.window)
+        name=simpledialog.askstring(self.app.tr(self.save_label),self.app.tr(self.name_label),initialvalue=self.profile_name,parent=self.window)
         if not name or not name.strip():return
         name=name.strip()
         if len(name)>100:
-            messagebox.showerror('Salva profilo','Usa un nome di massimo 100 caratteri.',parent=self.window)
+            messagebox.showerror(self.save_label,'Usa un nome di massimo 100 caratteri.',parent=self.window)
             return
         old_name=self.profile_name
         self.profile_name=name
@@ -251,24 +282,25 @@ class AirfoilEditor:
         try:
             raw=self.raw_profile()
             library=self.read_library()
-            if name in library and not messagebox.askyesno('Salva profilo','Sostituire il profilo già salvato?',parent=self.window):
+            if name in library and not messagebox.askyesno(self.save_label,self.replace_label,parent=self.window):
                 self.profile_name=old_name
                 return
             library[name]={'code':self.code,'profile':raw}
-            with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=LIBRARY_PATH.parent,delete=False) as stream:
+            self.library_path.parent.mkdir(parents=True,exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=self.library_path.parent,delete=False) as stream:
                 temporary=Path(stream.name)
                 json.dump(library,stream,ensure_ascii=False,indent=2)
-            os.replace(temporary,LIBRARY_PATH)
+            os.replace(temporary,self.library_path)
         except (OSError,ValueError,TypeError) as exc:
             self.profile_name=old_name
-            messagebox.showerror('Salva profilo',str(exc),parent=self.window)
+            messagebox.showerror(self.save_label,str(exc),parent=self.window)
             return
         finally:
             if temporary is not None:temporary.unlink(missing_ok=True)
         self.library=library
         self.update_choices()
         self.profile_choice.set(f'★ {name}')
-        self.status.set('Profilo salvato nella libreria.')
+        self.status.set(self.saved_label)
         self.draw()
 
     def apply(self):
@@ -278,35 +310,53 @@ class AirfoilEditor:
                 return
             self.save_editor_settings()
         except (OSError,ValueError,TypeError) as exc:
-            messagebox.showerror('Profilo alare',str(exc),parent=self.window)
+            messagebox.showerror(self.geometry_label,str(exc),parent=self.window)
             return
+        self.apply_profile(raw)
+        self.window.destroy()
+
+    def apply_profile(self,raw):
         self.app.vars[self.code_key].set(self.code)
         self.app.vars[self.custom_key].set(raw)
         self.app.draw_washout_preview()
         self.app.planform_editor.changed()
         self.app.refresh_summary()
-        self.window.destroy()
+
+    def editor_title(self):
+        return 'Editor profilo radice' if self.side=='root' else 'Editor profilo estremità'
+
+    def load_current(self):
+        code=self.app.vars[self.code_key].get().strip() or DEFAULT_NACA
+        self.set_profile(code,self.app.vars[self.custom_key].get())
+
+    def default_choice(self):
+        return f'NACA {self.code}'
+
+    def build_geometry_controls(self):
+        pass
 
     def open(self):
         if self.window and self.window.winfo_exists():self.window.lift();return
-        title='Editor profilo radice' if self.side=='root' else 'Editor profilo estremità'
+        title=self.editor_title()
         self.window=tk.Toplevel(self.app);self.window.title(self.app.tr(title));self.window.geometry('940x700');self.window.minsize(760,580)
         self.window.transient(self.app)
         self.window.protocol('WM_DELETE_WINDOW',self.apply)
         self.mode='edit';self.calibration=[];self.drag=None;self.image_drag=None
         self.image=None;self.photo=None;self.photo_key=None
+        self.image_locked=False
         self.image_angle=0.;self.rotation_drag=None
         self.image_pivot=None;self.pivot_drag=None
         self.calibration_mm=None;self.calibration_reference=[]
         library_bar=ttk.Frame(self.window,padding=(8,8,8,0));library_bar.pack(fill='x')
-        ttk.Label(library_bar,text='Libreria profili').pack(side='left',padx=3)
+        ttk.Label(library_bar,text=self.library_label).pack(side='left',padx=3)
         self.profile_choice=tk.StringVar()
         self.picker=ttk.Combobox(library_bar,textvariable=self.profile_choice,state='readonly',width=32)
         self.picker.pack(side='left',padx=6)
         self.picker.bind('<<ComboboxSelected>>',self.select_profile)
-        ttk.Button(library_bar,text='Salva profilo',command=self.save_profile).pack(side='left',padx=3)
+        ttk.Button(library_bar,text=self.save_label,command=self.save_profile).pack(side='left',padx=3)
         ttk.Button(library_bar,text='Chiudi e applica',command=self.apply).pack(side='right',padx=3)
-        self.status=tk.StringVar(value='Trascina le maniglie interne. I bordi fissano la lunghezza della corda.')
+        self.status=tk.StringVar(value=self.edit_status)
+        self.build_geometry_controls()
         ttk.Label(self.window,textvariable=self.status,padding=(10,0),wraplength=880).pack(fill='x')
         self.canvas=tk.Canvas(self.window,background='white',highlightthickness=1,highlightbackground='#94a3b8')
         self.canvas.pack(fill='both',expand=True,padx=10,pady=8)
@@ -320,24 +370,23 @@ class AirfoilEditor:
         self.angle_entry.bind('<FocusOut>',self.apply_angle)
         self.angle_window=self.canvas.create_window(0,0,window=angle_box,anchor='w',state='hidden')
         ttk.Label(self.window,text='Rotella per lo zoom dello sfondo. Tasto destro per i comandi del profilo e dello sfondo.',padding=(10,0,10,10)).pack(fill='x')
-        notes_box=ttk.LabelFrame(self.window,text='Note del profilo',padding=6)
+        notes_box=ttk.LabelFrame(self.window,text=self.notes_label,padding=6)
         notes_box.pack(fill='x',padx=10,pady=(0,8))
         self.notes=tk.Text(notes_box,height=3,wrap='word',undo=True)
         self.notes.pack(fill='x')
-        code=self.app.vars[self.code_key].get().strip() or DEFAULT_NACA
         try:
-            self.set_profile(code,self.app.vars[self.custom_key].get())
+            self.load_current()
         except (ValueError,TypeError) as exc:
-            messagebox.showerror('Profilo alare',str(exc),parent=self.window)
+            messagebox.showerror(self.geometry_label,str(exc),parent=self.window)
             self.window.destroy()
             return
         try:
             self.library=self.read_library()
         except (OSError,ValueError) as exc:
             self.library={}
-            messagebox.showerror('Libreria profili',str(exc),parent=self.window)
+            messagebox.showerror(self.library_label,str(exc),parent=self.window)
         self.update_choices()
-        self.profile_choice.set(f'★ {self.profile_name}' if self.profile_name in self.library else f'NACA {self.code}')
+        self.profile_choice.set(f'★ {self.profile_name}' if self.profile_name in self.library else self.default_choice())
         self.image_menu=tk.Menu(self.window,tearoff=False)
         self.canvas.bind('<Button-3>',self.show_image_menu)
         self.canvas.bind('<MouseWheel>',self.zoom_image)
@@ -361,6 +410,9 @@ class AirfoilEditor:
         if not math.isfinite(chord) or chord<=0:
             raise ValueError('Imposta una corda positiva nel pannello Geometria.')
         return chord
+
+    def calibration_default(self):
+        return self.chord()
 
     def image_transform(self):
         ox,oy,scale=self.transform()
@@ -391,7 +443,7 @@ class AirfoilEditor:
         self.angle_value.set(f'{self.image_angle:.8f}'.rstrip('0').rstrip('.') or '0')
 
     def apply_angle(self,_event=None):
-        if self.image is None:return True
+        if self.image is None or self.image_locked:return True
         try:
             angle=float(self.angle_value.get().replace(',','.'))
             if not math.isfinite(angle):raise ValueError
@@ -444,7 +496,11 @@ class AirfoilEditor:
     def show_image_menu(self,event):
         menu=self.image_menu
         menu.delete(0,'end')
-        menu.add_command(label=self.app.tr('Carica immagine…'),command=self.import_image)
+        menu.add_command(label=self.app.tr('Carica immagine…'),command=self.import_image,
+                         state='disabled' if self.image_locked else 'normal')
+        lock_label='Sblocca sfondo' if self.image_locked else 'Blocca sfondo'
+        menu.add_command(label=self.app.tr(lock_label),command=self.toggle_image_lock,
+                         state='normal' if self.image is not None else 'disabled')
         rotation_command=('Fine rotazione',self.finish_rotation) if self.mode=='rotate' else ('Ruota',lambda:self.set_mode('rotate'))
         commands=(
             rotation_command,
@@ -452,17 +508,28 @@ class AirfoilEditor:
             ('Rimuovi immagine',self.remove_image),
         )
         for label,command in commands:
-            menu.add_command(label=self.app.tr(label),command=command,state='normal' if self.image else 'disabled')
+            menu.add_command(label=self.app.tr(label),command=command,
+                             state='normal' if self.image is not None and not self.image_locked else 'disabled')
         menu.add_separator()
-        menu.add_command(label=self.app.tr('Modifica profilo'),command=lambda:self.set_mode('edit'))
-        menu.add_command(label=self.app.tr('Ripristina NACA'),command=self.reset_naca)
+        menu.add_command(label=self.app.tr(self.edit_label),command=lambda:self.set_mode('edit'))
+        menu.add_command(label=self.app.tr(self.reset_label),command=self.reset_geometry)
+        self.add_geometry_menu(menu,event)
         try:
             menu.tk_popup(event.x_root,event.y_root)
         finally:
             menu.grab_release()
 
+    def add_geometry_menu(self,menu,event):
+        pass
+
+    def toggle_image_lock(self):
+        if self.image is None:return
+        self.image_locked=not self.image_locked
+        self.release(None)
+        self.set_mode('edit')
+
     def zoom_image(self,event):
-        if self.image is not None and event.delta:
+        if self.image is not None and not self.image_locked and event.delta:
             factor=1.2**max(-10,min(10,event.delta/120))
             if self.resize_image(factor,(event.x,event.y)):
                 self.draw()
@@ -491,6 +558,11 @@ class AirfoilEditor:
         for item in self.canvas.find_all():
             if item!=self.angle_window:self.canvas.delete(item)
         w=self.canvas.winfo_width();h=self.canvas.winfo_height()
+        self.draw_background(w,h)
+        self.draw_geometry(w,h)
+        self.draw_image_controls(w,h)
+
+    def draw_background(self,w,h):
         if self.image is not None:
             from PIL import Image, ImageTk
             ix,iy,ratio=self.image_transform()
@@ -503,6 +575,8 @@ class AirfoilEditor:
                 self.photo=ImageTk.PhotoImage(rendered,master=self.canvas)
                 self.photo_key=key
             self.canvas.create_image(0,0,image=self.photo,anchor='nw',tags='background')
+
+    def draw_geometry(self,w,h):
         ox,oy,scale=self.transform()
         self.canvas.create_line(ox,oy,ox+scale,oy,fill='#64748b',dash=(4,3))
         dim_y=h-24
@@ -522,6 +596,9 @@ class AirfoilEditor:
                 if index in (0,len(self.controls[side])-1):continue
                 cx,cy=self.xy(x,y);r=6
                 self.canvas.create_oval(cx-r,cy-r,cx+r,cy+r,fill=color,outline='white',width=2,tags=('handle',f'{side}:{index}'))
+        self.canvas.create_text(12,12,anchor='nw',text=self.profile_name or f'NACA {self.code}',fill='#334155')
+
+    def draw_image_controls(self,w,h):
         for index,(px,py) in enumerate(self.calibration,1):
             x,y=self.image_point(px,py)
             self.canvas.create_oval(x-5,y-5,x+5,y+5,fill='#7c3aed',outline='white');self.canvas.create_text(x+9,y-9,text=str(index),fill='#7c3aed')
@@ -538,11 +615,11 @@ class AirfoilEditor:
             self.canvas.tag_raise(self.angle_window)
         else:
             self.canvas.itemconfigure(self.angle_window,state='hidden')
-        self.canvas.create_text(12,12,anchor='nw',text=self.profile_name or f'NACA {self.code}',fill='#334155')
 
     def set_mode(self,mode):
+        if self.image_locked:mode='edit'
         self.mode=mode;self.calibration=[]
-        messages={'edit':'Trascina le maniglie per modificare il profilo o lo sfondo per spostarlo.',
+        messages={'edit':'Sfondo bloccato. Le maniglie restano modificabili.' if self.image_locked else self.edit_status,
                   'rotate':'Trascina la croce per spostare il pivot. Trascina altrove per ruotare.',
                   'calibrate':'Seleziona due punti sull’immagine corrispondenti a una distanza nota.'}
         self.status.set(messages[mode]);self.draw()
@@ -564,16 +641,22 @@ class AirfoilEditor:
             else:
                 self.rotation_drag=(x,y,math.atan2(dy,dx),self.image_angle)
             return
+        if self.press_geometry(event):return
+        if self.image is not None and not self.image_locked:
+            px,py=self.image_pixel(event.x,event.y)
+            if 0<=px<self.image.width and 0<=py<self.image.height:
+                self.image_drag=(event.x,event.y,*self.image_origin)
+
+    def press_geometry(self,event):
         candidates=[]
         for side in ('upper','lower'):
             for index,(x,y) in enumerate(self.controls[side]):
                 if index in (0,len(self.controls[side])-1):continue
                 cx,cy=self.xy(x,y);candidates.append((math.hypot(event.x-cx,event.y-cy),side,index))
-        if candidates and min(candidates)[0]<15:self.drag=min(candidates)[1:]
-        elif self.image is not None:
-            px,py=self.image_pixel(event.x,event.y)
-            if 0<=px<self.image.width and 0<=py<self.image.height:
-                self.image_drag=(event.x,event.y,*self.image_origin)
+        if candidates and min(candidates)[0]<15:
+            self.drag=min(candidates)[1:]
+            return True
+        return False
 
     def motion(self,event):
         if self.pivot_drag is not None:
@@ -593,7 +676,9 @@ class AirfoilEditor:
             self.image_origin=[ox+(event.x-x)/scale,oy+(event.y-y)/scale]
             self.draw()
             return
-        if not self.drag:return
+        if self.drag:self.motion_geometry(event)
+
+    def motion_geometry(self,event):
         side,index=self.drag;x,y=self.profile_xy(event.x,event.y);points=self.controls[side]
         x=max(points[index-1][0]+.005,min(points[index+1][0]-.005,x))
         _,top=self.profile_xy(0,20)
@@ -614,13 +699,13 @@ class AirfoilEditor:
     def release(self,_event):
         self.drag=None;self.image_drag=None;self.rotation_drag=None;self.pivot_drag=None
 
-    def reset_naca(self):
+    def reset_geometry(self):
         self.set_profile(self.code)
         self.profile_choice.set(f'NACA {self.code}')
         self.set_mode('edit')
 
     def import_image(self):
-        path=filedialog.askopenfilename(parent=self.window,title='Importa immagine del profilo',filetypes=[('Immagini raster','*.png *.jpg *.jpeg *.bmp *.tif *.tiff'),('Tutti i file','*.*')])
+        path=filedialog.askopenfilename(parent=self.window,title=self.image_title,filetypes=[('Immagini raster','*.png *.jpg *.jpeg *.bmp *.tif *.tiff'),('Tutti i file','*.*')])
         if not path:return
         try:
             from PIL import Image
@@ -656,7 +741,7 @@ class AirfoilEditor:
             messagebox.showerror('Calibrazione',str(exc),parent=self.window)
             return
         length=simpledialog.askfloat(self.app.tr('Calibrazione'),self.app.tr('Distanza reale tra i due punti (mm):'),
-            initialvalue=self.calibration_mm or chord,parent=self.window,minvalue=.001)
+            initialvalue=self.calibration_mm or self.calibration_default(),parent=self.window,minvalue=.001)
         if length is None:
             self.set_mode('edit')
             return

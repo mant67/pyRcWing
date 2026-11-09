@@ -1,7 +1,8 @@
 """Horizontal aileron editor, from the existing nominal export projections."""
+# File revision: 2
 import json
 import math
-from core import (aileron_parameters,aileron_axial_bounds,aileron_cap_parameters,
+from core import (aileron_parameters,aileron_axial_bounds,aileron_cap_parameters,aileron_hinge,
     wing_section_at,upper_surface_at)
 from sections import section_preview,clip_polygon
 
@@ -50,12 +51,13 @@ class HorizontalView:
 
 
 class AileronEditor:
-    def __init__(self,owner):
-        self.owner=owner;self.app=owner.app;self.canvas=owner.canvases['aileron']
+    def __init__(self,owner,canvas=None):
+        self.owner=owner;self.app=owner.app;self.canvas=canvas if canvas is not None else owner.canvases['aileron']
         self.handles={};self.view=None;self.detail_view=None;self.drag=None;self.data=None;self.body_cache=None;self.syncing=False
+        self.canvas.bind('<ButtonPress-1>',self.press);self.canvas.bind('<B1-Motion>',self.motion);self.canvas.bind('<ButtonRelease-1>',self.release)
+        if canvas is not None:return
         self.app.aileron_root_distance.trace_add('write',self.distance_changed)
         for key in ('inizio_alettone','gioco_alettone_radice'):self.app.vars[key].trace_add('write',self.model_distance_changed)
-        self.canvas.bind('<ButtonPress-1>',self.press);self.canvas.bind('<B1-Motion>',self.motion);self.canvas.bind('<ButtonRelease-1>',self.release)
         self.sync_distance(force=True)
 
     def model_distance_changed(self,*_):
@@ -89,7 +91,9 @@ class AileronEditor:
 
     def geometry(self,p):
         q=dict(p,crea_asole_cerniere=False,create_servo_void=False,chiudi_estremita_alettone=False,washout_deg=0.)
-        keys=('span','root_chord','tip_chord','sweep','airfoil','airfoil_tip','points','stations','elliptical_tip','tip_length','wing_center_line_perc','planform','ellipse_center_perc','line_width','larghezza_linea_vaso')
+        keys=('span','root_chord','tip_chord','sweep','airfoil','airfoil_tip','custom_airfoil_root','custom_airfoil_tip',
+              'points','stations','elliptical_tip','tip_length','wing_center_line_perc','planform','ellipse_center_perc',
+              'planform_nodes','tip_nodes','line_width','larghezza_linea_vaso')
         key=json.dumps({k:q.get(k) for k in keys},sort_keys=True)
         if self.body_cache is None or self.body_cache[0]!=key:
             data=section_preview(dict(q,crea_alettone=False),'ala')
@@ -104,27 +108,34 @@ class AileronEditor:
         bounds=aileron_axial_bounds(a);caps=aileron_cap_parameters(p)
         part_data=section_preview(q,'alettone')
         part,part_rows=projected_envelope([[(x,z+part_data['origin']) for x,z in poly] for poly in part_data['polygons']])
-        start=a['inizio_alettone'];end=start+a['lunghezza_alettone'];hinges=[]
-        for z,width in ((start,a['larghezza_alettone_radice']),(end,a['larghezza_alettone_estremita'])):
-            chord,lead,_=wing_section_at(q,z);hinges.append(lead+chord-width)
-        def hinge(z):return hinges[0]+(hinges[1]-hinges[0])*(z-start)/(end-start)
-        cavity=clip_polygon(body,lambda v:v[1]-bounds['cut_start'])
-        cavity=clip_polygon(cavity,lambda v:bounds['cut_end']-v[1])
-        cavity=clip_polygon(cavity,lambda v:v[0]-hinge(v[1])+a['gioco_alettone']/2)
+        hinge_xyz,levels=aileron_hinge(q,a)
+        def hinge(z):return hinge_xyz(z)[0]
+        lo,hi=bounds['cut_start'],bounds['cut_end']
+        if levels:
+            stations=sorted({lo,hi,*levels,*(z for z,_,_ in body_rows if lo<z<hi)})
+            edge=[(max(at(body_rows,z)[0],hinge(z)-a['gioco_alettone']/2),z) for z in stations]
+            cavity=edge+[(at(body_rows,z)[1],z) for z in reversed(stations)]
+        else:
+            cavity=clip_polygon(body,lambda v:v[1]-lo)
+            cavity=clip_polygon(cavity,lambda v:hi-v[1])
+            cavity=clip_polygon(cavity,lambda v:v[0]-hinge(v[1])+a['gioco_alettone']/2)
         return dict(body=body,body_rows=body_rows,a=a,bounds=bounds,caps=caps,part=part,part_rows=part_rows,cavity=cavity,hinge=hinge)
 
-    def draw(self,c,p,w,h):
+    def draw(self,c,p,w,h,trace_view=None):
         self.handles={};data=self.geometry(p);self.data=data
-        body=data['body'];a=data['a'];left_right=w*.48-14
-        if self.drag is None:self.view=HorizontalView((28,76,left_right,h-76),body)
+        tracing=trace_view is not None
+        body=data['body'];a=data['a'];left_right=w-20 if tracing else w*.48-14
+        if tracing:self.view=trace_view
+        elif self.drag is None:self.view=HorizontalView((28,76,left_right,h-76),body)
         view=self.view
-        c.create_polygon(view.coords(body),fill='#dbeafe',outline='#64748b',tags='aileron_wing')
+        c.create_polygon(view.coords(body),fill='' if tracing else '#dbeafe',
+                         outline='#2563eb' if tracing else '#64748b',width=2 if tracing else 1,tags='aileron_wing')
         self.owner.note(c,16,10,'Alettone · Radice a sinistra, estremità a destra',left_right-20)
         if not a:
             self.drag=None
-            self.owner.note(c,w*.51,60,'Alettone disattivato.',w*.46);return
+            self.owner.note(c,16 if tracing else w*.51,60,'Alettone disattivato.',w*.46);return
         bounds=data['bounds'];part=data['part'];cavity=data['cavity'];rows=data['part_rows'];caps=data['caps']
-        self.paint(c,view,data)
+        self.paint(c,view,data,tracing=tracing)
         z0,z1=bounds['part_start'],bounds['part_end'];zm=(z0+z1)/2
         x0,x1=at(rows,z0),at(rows,z1);xm=at(rows,zm)
         points={'start':(x0[1],z0),'end':(x1[1],z1),'width_root':(x0[0],z0),'width_tip':(x1[0],z1),'move':((xm[0]+xm[1])/2,zm)}
@@ -132,7 +143,7 @@ class AileronEditor:
         for key,(x,y) in self.handles.items():c.create_oval(x-6,y-6,x+6,y+6,fill='#ea580c',outline='white',width=2,tags=('aileron_handle',key))
         low=min(x for x,z in body)-22/view.scale
         self.dimension(c,view.xy(low,0.),view.xy(low,z0),'R','#15803d',dy=-12)
-        self.detail(c,data,w*.51+10,w-20,h)
+        if not tracing:self.detail(c,data,w*.51+10,w-20,h)
         self.owner.note(c,16,h-46,'Estremi: lunghezza · lato cerniera: larghezze · centro: sposta.',left_right-28)
         self.owner.note(c,16,h-23,'Bordo d’uscita vincolato all’ala · pianta senza washout.',left_right-28,color='#64748b')
 
@@ -143,18 +154,18 @@ class AileronEditor:
         c.create_text((a[0]+b[0])/2+dx,(a[1]+b[1])/2+dy,text=label,fill=color,font=('Segoe UI',9,'bold'),tags=('aileron_dimension_label',label))
 
     @staticmethod
-    def paint(c,view,data,box=None,detail=False):
+    def paint(c,view,data,box=None,detail=False,tracing=False):
         def polygon(points,**kwargs):
             if box:points=clipped_box(points,*box)
             if len(points)>=3:c.create_polygon(view.coords(points),**kwargs)
         if detail:polygon(data['body'],fill='#e2e8f0',outline='#94a3b8',tags='detail_wing')
-        polygon(data['cavity'],fill='white',outline='#64748b',dash=(4,3),tags='detail_cavity' if detail else 'aileron_cavity')
-        polygon(data['part'],fill='#fed7aa',outline='#c2410c',width=1.5,tags='detail_aileron' if detail else 'aileron_part')
+        polygon(data['cavity'],fill='' if tracing else 'white',outline='#64748b',dash=(4,3),tags='detail_cavity' if detail else 'aileron_cavity')
+        polygon(data['part'],fill='' if tracing else '#fed7aa',outline='#c2410c',width=1.5,tags='detail_aileron' if detail else 'aileron_part')
         if data['caps']:
             thick=data['caps']['spessore'];b=data['bounds']
             for lo,hi in ((b['part_start'],b['part_start']+thick),(b['part_end']-thick,b['part_end'])):
                 band=clip_polygon(data['part'],lambda v:v[1]-lo);band=clip_polygon(band,lambda v:hi-v[1])
-                polygon(band,fill='#93c5fd',outline='#1d4ed8',tags='detail_caps' if detail else 'aileron_caps')
+                polygon(band,fill='' if tracing else '#93c5fd',outline='#1d4ed8',tags='detail_caps' if detail else 'aileron_caps')
 
     def detail(self,c,data,left,right,h):
         a=data['a'];b=data['bounds'];rows=data['part_rows'];part=data['part'];cavity=data['cavity'];green='#15803d';red='#dc2626'

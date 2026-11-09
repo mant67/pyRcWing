@@ -1,5 +1,5 @@
 """Versioned JSON configuration files. No CAD objects or execution state."""
-# File revision: 1
+# File revision: 4
 import copy
 import json
 import math
@@ -28,7 +28,7 @@ def validate_configuration(data,wing_keys,connector_keys):
     def strings(values,keys,label):
         if not isinstance(values,dict) or set(values)!=set(keys):
             raise ValueError('Configurazione '+label+' incompleta o non compatibile con questa versione.')
-        if any(not isinstance(value,str) or len(value)>(20000 if key in ('custom_airfoil_root','custom_airfoil_tip') else 1000)
+        if any(not isinstance(value,str) or len(value)>(20000 if key in ('custom_airfoil_root','custom_airfoil_tip','planform_notes','planform_nodes','tip_nodes','aileron_nodes') else 1000)
                for key,value in values.items()):
             raise ValueError('Valori non validi nella configurazione '+label+'.')
     # Configurations saved by v75 predate the independent wing mirror switch.
@@ -38,7 +38,7 @@ def validate_configuration(data,wing_keys,connector_keys):
     if isinstance(data.get('wing'),dict) and 'verifica_prusaslicer' not in data['wing']:
         data=copy.deepcopy(data);data['wing']['verifica_prusaslicer']='0'
     if isinstance(data.get('wing'),dict):
-        missing=[key for key in ('custom_airfoil_root','custom_airfoil_tip') if key in wing_keys and key not in data['wing']]
+        missing=[key for key in ('custom_airfoil_root','custom_airfoil_tip','planform_name','planform_notes','planform_nodes','tip_nodes','aileron_nodes') if key in wing_keys and key not in data['wing']]
         if missing:
             data=copy.deepcopy(data)
             for key in missing:data['wing'][key]=''
