@@ -1,5 +1,5 @@
 """Versioned JSON configuration files. No CAD objects or execution state."""
-# File revision: 4
+# File revision: 5
 import copy
 import json
 import math
@@ -25,6 +25,8 @@ def validate_configuration(data,wing_keys,connector_keys):
         raise ValueError('Il file non è una configurazione Wing RC.')
     if type(data.get('schema_version')) is not int or data['schema_version']!=SCHEMA:
         raise ValueError('Versione del formato configurazione non supportata.')
+    if not isinstance(data.get('project_name',''),str):
+        raise ValueError('Nome del progetto non valido.')
     def strings(values,keys,label):
         if not isinstance(values,dict) or set(values)!=set(keys):
             raise ValueError('Configurazione '+label+' incompleta o non compatibile con questa versione.')
@@ -137,6 +139,13 @@ class ConfigurationMixin:
         parent=self.pages[0]
         box=ttk.LabelFrame(parent,text='Configurazione ala',padding=8)
         box.pack(fill='x',pady=(0,10),before=parent.winfo_children()[0])
+        name_row=ttk.Frame(box);name_row.pack(fill='x',pady=(0,6))
+        ttk.Label(name_row,text='Nome del progetto (obbligatorio)').pack(side='left',padx=(0,8))
+        self.project_name=tk.StringVar()
+        self.project_name_entry=tk.Entry(name_row,textvariable=self.project_name,width=36)
+        self.project_name_entry.pack(side='left',fill='x',expand=True)
+        self.project_name_background=self.project_name_entry.cget('background')
+        self.project_name.trace_add('write',self.clear_project_name_error)
         row=ttk.Frame(box);row.pack(fill='x')
         self.configuration_export_button=ttk.Button(row,text='Esporta configurazione…',command=self.export_configuration)
         self.configuration_export_button.pack(side='left',padx=(0,8))
@@ -158,6 +167,7 @@ class ConfigurationMixin:
             rows.append(dict(position=str(min(25+len(rows)*20,85)),diameter='4',length='',angle_auto='1',angle_deg=''))
         from core import VERSION
         data=dict(format=FORMAT,schema_version=SCHEMA,generator_version=VERSION,
+                  project_name=self.project_name.get().strip(),
                   saved_at=datetime.now().astimezone().isoformat(timespec='seconds'),
                   wing={k:v.get() for k,v in self.vars.items()},
                   connector={k:v.get() for k,v in self.connector_vars.items()},
@@ -167,13 +177,30 @@ class ConfigurationMixin:
         return data
 
     def configuration_snapshot(self):
+        if not self.check_project_name():
+            raise ValueError(self.tr('Inserisci il nome del progetto nella prima schermata.'))
         return validate_configuration(self._configuration_state(),self.vars,self.connector_vars)
+
+    def clear_project_name_error(self,*_):
+        if self.project_name.get().strip() or self.loading_configuration:
+            self.project_name_entry.configure(background=self.project_name_background)
+
+    def check_project_name(self,notify=False):
+        if self.project_name.get().strip():return True
+        self.project_name_entry.configure(background='#fecaca')
+        if self.step_index==0:
+            self.project_name_entry.focus_set()
+        elif notify:
+            messagebox.showwarning(self.tr('Nome del progetto'),
+                                   self.tr('Inserisci il nome del progetto nella prima schermata.'),parent=self)
+        return False
 
     def _apply_configuration(self,data,refresh=True):
         self.loading_configuration=True
         if self.previews.pending is not None:
             self.after_cancel(self.previews.pending);self.previews.pending=None
         try:
+            self.project_name.set(data.get('project_name',''))
             for key,value in data['wing'].items():self.vars[key].set(value)
             for key,value in data['connector'].items():self.connector_vars[key].set(value)
             raw_count=data['spars']['count']
@@ -229,6 +256,7 @@ class ConfigurationMixin:
 
     def export_configuration(self):
         if self.generating:return
+        if not self.check_project_name(notify=True):return
         path=filedialog.asksaveasfilename(title='Esporta configurazione ala',defaultextension='.json',
              initialfile=self.configuration_path.name if self.configuration_path else 'configurazione_ala.json',
              initialdir=str(self.configuration_path.parent if self.configuration_path else self.last_dir),
@@ -270,6 +298,7 @@ class ConfigurationMixin:
 
     def _start_configuration_job(self,kind,path):
         if self.generating:return
+        if kind=='save' and not self.check_project_name(notify=True):return
         label='Esportazione configurazione' if kind=='save' else 'Importazione configurazione'
         self.begin_operation(label)
         self.is_export_operation=True

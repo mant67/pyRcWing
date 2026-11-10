@@ -1,6 +1,6 @@
 from mesh_checks import final_mesh_checks
 """Wizard di configurazione; la geometria risiede nel modulo core v91."""
-# File revision: 8
+# File revision: 9
 import tkinter as tk
 import copy
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -45,15 +45,16 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
             canvas=tk.Canvas(page,highlightthickness=0)
             scrollbar=ttk.Scrollbar(page,orient='vertical',command=canvas.yview)
-            canvas.configure(yscrollcommand=scrollbar.set)
-            scrollbar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+            canvas.configure(yscrollcommand=lambda first,last,c=canvas,s=scrollbar:
+                             self.update_page_scrollbar(c,s,first,last))
+            canvas.pack(side='left',fill='both',expand=True)
             content=ttk.Frame(canvas,padding=16)
             window=canvas.create_window((0,0),window=content,anchor='nw')
             content.bind('<Configure>',lambda event,c=canvas:c.configure(scrollregion=c.bbox('all')))
             canvas.bind('<Configure>',lambda event,c=canvas,w=window:c.itemconfigure(w,width=event.width))
             self.pages.append(content);self.page_canvases.append(canvas)
         self.step_index=0
-        self.bind('<MouseWheel>',lambda event:self.page_canvases[self.step_index].yview_scroll(-int(event.delta/120),'units'))
+        self.bind('<MouseWheel>',self.scroll_page)
         self.wing_tab=self.pages[1];self.connector_tab=self.pages[8]
         root=self.pages[1]
         body=ttk.Frame(root); body.pack(fill="x", pady=(0,8))
@@ -591,6 +592,21 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         if success:self.progress_value=100.
         self.progress_bar.configure(mode='determinate',value=self.progress_value)
         self.progress_text.set(self.operation_name+(' completata — 100%' if success else ' non completata — errore'))
+
+    @staticmethod
+    def update_page_scrollbar(canvas,scrollbar,first,last):
+        scrollbar.set(first,last)
+        if canvas.winfo_height()<=1:return
+        needed=float(first)>0 or float(last)<1
+        if needed and not scrollbar.winfo_manager():
+            scrollbar.pack(side='right',fill='y',before=canvas)
+        elif not needed and scrollbar.winfo_manager():
+            scrollbar.pack_forget()
+
+    def scroll_page(self,event):
+        canvas=self.page_canvases[self.step_index]
+        if canvas.yview()!=(0.,1.):
+            canvas.yview_scroll(-int(event.delta/120),'units')
 
     def show_step(self,index):
         index=max(0,min(len(self.pages)-1,index))

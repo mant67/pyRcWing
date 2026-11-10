@@ -1,4 +1,5 @@
 """Menus, safe close handling and persistent UI preferences."""
+# File revision: 1
 import copy,json,os,tempfile
 from pathlib import Path
 import tkinter as tk
@@ -80,6 +81,7 @@ class MenuMixin:
         answer=messagebox.askyesnocancel('Modifiche non salvate','Ci sono parametri non salvati. Vuoi salvarli prima di continuare?',parent=self)
         if answer is None:return False
         if answer is False:return True
+        if not self.check_project_name(notify=True):return False
         path=self.configuration_path
         if path is None:
             path=filedialog.asksaveasfilename(parent=self,title='Esporta configurazione ala',defaultextension='.json',initialfile='configurazione_ala.json',filetypes=[('Configurazione ala','*.json')])

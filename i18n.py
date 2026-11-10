@@ -1,5 +1,5 @@
 """Display-only Italian/English translation; configuration keys stay unchanged."""
-# File revision: 22
+# File revision: 24
 import re,functools
 import tkinter as tk
 from tkinter import messagebox,filedialog
@@ -78,6 +78,12 @@ Punti profilo => Airfoil points
 Stazioni lungo Z => Stations along Z
 Pianta alare => Wing planform
 Profili alari => Airfoils
+Editor washout => Washout editor
+Editor washout… => Washout editor…
+Trascina la linea viola per impostare l’inizio dello svergolamento. => Drag the purple line to set where the washout starts.
+Nome del progetto (obbligatorio) => Project name (required)
+Nome del progetto => Project name
+Inserisci il nome del progetto nella prima schermata. => Enter the project name on the first screen.
 Aggancio ai riferimenti => Snap to references
 Vista X/Z nominale. Clic: seleziona. Doppio clic: aggiungi un piano. Trascina per spostare. Tasto destro: elimina. Quote Z dalla base di stampa di ciascun componente. => Nominal X/Z view. Click to select. Double-click to add a plane. Drag to move. Right-click to delete. Z is measured from each component's print base.
 Inizio scasso alettone => Aileron recess start

@@ -1,5 +1,5 @@
 """Anteprime 2D leggere del wizard; nessuna modifica ai solidi esportati."""
-# File revision: 16
+# File revision: 17
 import math
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -35,6 +35,57 @@ class View:
     def text(self,x,z,text,**kwargs):return self.canvas.create_text(*self.xy(x,z),text=text,**kwargs)
 
 
+class WashoutStartEditor:
+    def __init__(self,owner,canvas):
+        self.owner=owner
+        self.canvas=canvas
+        self.drag=None
+        self.marker=None
+
+    def draw(self,c,p,w,h,trace_view):
+        outline=[(x,z) for z,x in planform_outline(p)]
+        view=trace_view
+        c.create_polygon(view.coords(outline),fill='',outline='#2563eb',width=2)
+        if p['elliptical_tip']:
+            leading,trailing=tip_planform_edges(p)
+            tip=[(x,z) for _,x,z in leading]+[(x,z) for _,x,z in reversed(trailing)]
+            c.create_polygon(view.coords(tip),fill='',outline='#ea580c',width=2)
+        span=p['span']
+        start=min(span,washout_parameters(p)['washout_start'])
+        chord,lead,_=planform_section(p,start)
+        x,top=view.xy(lead,start)
+        _,bottom=view.xy(lead+chord,start)
+        root_x,root_y=view.xy(0,0)
+        dim_y=min(view.xy(x,z)[1] for x,z in outline)-22
+        ink='#7c3aed'
+        c.create_line(root_x,root_y,root_x,dim_y-4,fill=ink,dash=(3,3))
+        c.create_line(x,dim_y-4,x,bottom,fill=ink,width=2,dash=(5,3),tags='washout_start_line')
+        if start>0:c.create_line(root_x,dim_y,x,dim_y,fill=ink,arrow='both')
+        c.create_text((root_x+x)/2,dim_y-10,text=f'{start:.2f} mm',fill=ink,tags='washout_start_dimension')
+        cy=(top+bottom)/2
+        c.create_oval(x-6,cy-6,x+6,cy+6,fill=ink,outline='white',width=2)
+        self.marker=(x,dim_y-5,bottom,view.scale,span,start)
+        c.create_text(16,h-23,anchor='w',fill='#475569',text=self.owner.app.tr(
+            'Trascina la linea viola per impostare l’inizio dello svergolamento.'))
+
+    def press(self,event):
+        if self.marker is None:return
+        x,top,bottom,scale,span,start=self.marker
+        if abs(event.x-x)<=10 and top<=event.y<=bottom+8:
+            self.drag=(event.x,scale,span,start)
+
+    def motion(self,event):
+        if self.drag is None:return
+        x,scale,span,start=self.drag
+        limit=span-min(.01,span/1000)
+        value=max(0.,min(limit,round(start+(event.x-x)/scale,2)))
+        self.owner.app.vars['washout_start'].set(f'{value:.10g}')
+        self.owner.draw()
+
+    def release(self,event):
+        self.drag=None
+
+
 class ComponentTracingEditor(AirfoilEditor):
     """Component handles over the saved planform background, in millimetres."""
     def __init__(self,owner,key):
@@ -51,7 +102,7 @@ class ComponentTracingEditor(AirfoilEditor):
         self.image=None
         self.photo=None
         self.photo_key=None
-        title='Editor punta alare' if self.key=='tip' else 'Editor alettone'
+        title={'tip':'Editor punta alare','aileron':'Editor alettone','washout':'Editor washout'}[self.key]
         self.window=tk.Toplevel(self.app)
         self.window.title(self.app.tr(title))
         self.window.geometry('940x700')
@@ -65,7 +116,7 @@ class ComponentTracingEditor(AirfoilEditor):
         ttk.Button(bar,text='Chiudi e applica',command=self.close).pack(side='right')
         self.canvas=tk.Canvas(self.window,background='white',highlightthickness=1,highlightbackground='#94a3b8')
         self.canvas.pack(fill='both',expand=True,padx=10,pady=(0,10))
-        editor_class=TipEditor if self.key=='tip' else AileronEditor
+        editor_class={'tip':TipEditor,'aileron':AileronEditor,'washout':WashoutStartEditor}[self.key]
         self.editor=editor_class(self,canvas=self.canvas)
         self.trace_view=None
         self.view_zoom=1.
@@ -98,7 +149,8 @@ class ComponentTracingEditor(AirfoilEditor):
 
     def close(self):
         self.window.destroy()
-        self.owner.draw(self.key)
+        if self.key=='washout':self.app.draw_washout_preview()
+        else:self.owner.draw(self.key)
         self.app.refresh_summary()
 
     def chord(self):
@@ -166,6 +218,7 @@ class ComponentTracingEditor(AirfoilEditor):
             self.note(c,16,48,str(exc),w-32,color='#b91c1c')
 
     def component_edges(self,p):
+        if self.key=='washout':return []
         if self.key=='tip':
             if not p['elliptical_tip']:return []
             return tip_planform_edges(p)
@@ -183,6 +236,7 @@ class ComponentTracingEditor(AirfoilEditor):
         return key if key is not None and math.dist(target,self.node_handles[key])<=12 else None
 
     def edge_hit(self,target):
+        if not self.node_edges:return None
         nodes=planform_nodes(self.app.vars[self.node_key].get())
         best=(12.,None)
         for side,edge in enumerate(self.node_edges):
@@ -362,11 +416,11 @@ class WizardPreviews:
         self.spar_editor=SparEditor(self)
         self.aileron_editor=AileronEditor(self)
         self.component_tracers={}
-        for key,index,label in (('tip',3,'Editor punta…'),('aileron',5,'Editor alettone…')):
+        for key,index,label in (('washout',2,'Editor washout…'),('tip',3,'Editor punta…'),('aileron',5,'Editor alettone…')):
             tracer=ComponentTracingEditor(self,key)
             self.component_tracers[key]=tracer
             ttk.Button(app.pages[index],text=label,command=tracer.open).pack(
-                anchor='w',pady=(6,0),before=self.canvases[key])
+                anchor='w',pady=(6,0),before=app.washout_canvas if key=='washout' else self.canvases[key])
         self.slots_preview=SlotsPreview(self)
         self.sync_traces()
 
