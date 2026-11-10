@@ -4,3 +4,4 @@ __pycache__/
 preferences/
 export/
 backup/
+models/

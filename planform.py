@@ -1,5 +1,5 @@
 """Shared nominal planform; all lengths in mm, span along Z."""
-# File revision: 4
+# File revision: 5
 import json
 import math
 from functools import lru_cache
@@ -12,8 +12,13 @@ PLANFORM_EDGES=('leading','trailing')
 def planform_nodes(raw):
     """Each node stores span fraction and signed offset in mm from the base edge."""
     values=json.loads(raw) if raw else {}
-    if not isinstance(values,dict) or set(values)-set((*PLANFORM_EDGES,'trailing_end')):
+    if not isinstance(values,dict) or set(values)-set((*PLANFORM_EDGES,'trailing_end','tip_apex')):
         raise ValueError('Nodi della pianta non validi.')
+    if 'tip_apex' in values:
+        apex=values['tip_apex']
+        if (not isinstance(apex,list) or len(apex)!=2
+                or any(type(v) not in (int,float) or not .25<=v<=2.5 for v in apex)):
+            raise ValueError('Maniglie della punta non valide.')
     if 'trailing_end' in values:
         end=values['trailing_end']
         if (not isinstance(end,list) or len(end)!=2

@@ -1,5 +1,5 @@
 """Anteprime 2D leggere del wizard; nessuna modifica ai solidi esportati."""
-# File revision: 7
+# File revision: 9
 import math
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -8,7 +8,7 @@ from core import *
 from planform import PLANFORM_EDGES, insert_curve_node, node_handle_lengths, with_node_stations
 from planform_ui import draw_node_tangent, local_slope, move_tangent_handle
 from sections import section_preview, clip_polygon
-from tip_ui import TipEditor
+from tip_ui import TipEditor, tip_planform_edges
 from spars_ui import SparEditor
 from aileron_ui import AileronEditor, HorizontalView
 from slots_ui import SlotsPreview
@@ -146,7 +146,15 @@ class ComponentTracingEditor(AirfoilEditor):
                     x,y=self.trace_view.xy(*point[1:])
                     self.node_handles[(side,index)]=(x,y)
                     c.create_oval(x-6,y-6,x+6,y+6,fill='#ea580c',outline='#fff',width=2)
-            if self.key=='tip' and self.selected_node in self.node_handles:
+            if self.key=='tip' and self.selected_node=='apex' and 'wing_center_line_perc' in self.editor.handles:
+                x,y=self.editor.handles['wing_center_line_perc']
+                lengths=tip_apex_handles(p.get(self.node_key,''))
+                self.tangent_grips={direction:(x,y+direction*24*length)
+                                    for direction,length in zip((-1,1),lengths)}
+                c.create_line(*self.tangent_grips[-1],*self.tangent_grips[1],fill='#7c3aed',width=2)
+                for gx,gy in self.tangent_grips.values():
+                    c.create_oval(gx-5,gy-5,gx+5,gy+5,fill='#7c3aed',outline='white',width=2)
+            elif self.key=='tip' and self.selected_node in self.node_handles:
                 side,index=self.selected_node
                 nodes=planform_nodes(p.get(self.node_key,''))[side]
                 fraction=nodes[index][0]
@@ -160,13 +168,7 @@ class ComponentTracingEditor(AirfoilEditor):
     def component_edges(self,p):
         if self.key=='tip':
             if not p['elliptical_tip']:return []
-            edges=[[],[]]
-            for fraction,_ in smooth_tip_sections(p):
-                xy=smooth_tip_profile(p,fraction,points=80)
-                z=p['span']+p['tip_length']*fraction
-                xs=[x for x,_ in xy]
-                for edge,x in zip(edges,(min(xs),max(xs))):edge.append((fraction,x,z))
-            return edges
+            return tip_planform_edges(p)
         a=aileron_parameters(p)
         if not a:return []
         hinge,_=aileron_hinge(p,a)
@@ -217,8 +219,12 @@ class ComponentTracingEditor(AirfoilEditor):
         try:menu.tk_popup(event.x_root,event.y_root)
         finally:menu.grab_release()
 
-    def save_nodes(self,nodes):
-        raw=json.dumps(dict(zip(PLANFORM_EDGES,nodes)),separators=(',',':')) if any(nodes) else ''
+    def save_nodes(self,nodes,apex=None):
+        data=dict(zip(PLANFORM_EDGES,nodes))
+        if self.key=='tip':
+            if apex is None:apex=tip_apex_handles(self.app.vars[self.node_key].get())
+            if tuple(apex)!=(1.,1.):data['tip_apex']=apex
+        raw=json.dumps(data,separators=(',',':')) if any(data.values()) else ''
         p=dict(self.params(),**{self.node_key:raw})
         try:
             if self.key=='tip':
@@ -265,9 +271,11 @@ class ComponentTracingEditor(AirfoilEditor):
         self.draw()
 
     def press(self,event):
+        center=(self.editor.handles.get('wing_center_line_perc') if self.selected_node=='apex'
+                else self.node_handles.get(self.selected_node))
         for direction,grip in self.tangent_grips.items():
             distance=math.dist((event.x,event.y),grip)
-            if distance<=10 and distance<math.dist((event.x,event.y),self.node_handles[self.selected_node]):
+            if center is not None and distance<=10 and distance<math.dist((event.x,event.y),center):
                 p=self.params()
                 self.node_drag=(('tangent',self.selected_node,direction),event.x,event.y,p,planform_nodes(p.get(self.node_key,'')))
                 return
@@ -276,6 +284,9 @@ class ComponentTracingEditor(AirfoilEditor):
             self.editor.press(event)
             if self.editor.drag is None:
                 self.view_drag=(event.x,event.y,*self.view_offset)
+            elif self.key=='tip' and self.editor.drag[0]=='wing_center_line_perc':
+                self.selected_node='apex'
+                self.draw()
             return
         p=self.params()
         self.selected_node=node
@@ -284,8 +295,7 @@ class ComponentTracingEditor(AirfoilEditor):
 
     @staticmethod
     def tip_base_edge(p,side,fraction):
-        xs=[x for x,_ in base_smooth_tip_profile(p,fraction,points=80)]
-        return max(xs) if side else min(xs)
+        return tip_planform_edges(p,edited=False,fractions=(fraction,))[side][0][1]
 
     def motion(self,event):
         if self.view_drag is not None:
@@ -300,6 +310,12 @@ class ComponentTracingEditor(AirfoilEditor):
         nodes=[list(edge) for edge in original]
         if key[0]=='tangent':
             _,selected,direction=key
+            if selected=='apex':
+                handles=list(tip_apex_handles(p.get(self.node_key,'')))
+                cy=self.editor.handles['wing_center_line_perc'][1]
+                handles[int(direction>0)]=max(.25,min(2.5,direction*(event.y-cy)/24))
+                self.save_nodes(nodes,handles)
+                return
             side,index=selected
             fraction=nodes[side][index][0]
             base=local_slope(lambda f:self.tip_base_edge(p,side,f),fraction)

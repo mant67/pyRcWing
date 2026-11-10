@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# pyRcWing v9.1.1 — motore geometrico
-# File revision: 4
+# pyRcWing v9.1.3 — motore geometrico
+# File revision: 6
 # Generazione STL con solidi CAD e unioni booleane; non usa OpenSCAD.
 # Dipendenza: cadquery (installare con: py -m pip install cadquery)
 import math, os
@@ -22,7 +22,7 @@ from planform import curve_offset, curve_stations, edge_offset, elliptical_planf
 from spars import spar_automatic, legacy_spar_angle, spar_axis, has_manual_spar_angles
 from airfoil_editor import profile_from_controls
 
-VERSION = "9.1.1"
+VERSION = "9.1.3"
 
 def naca_profile(code="2412", n=80, trailing_edge_ratio=0.0):
     code = str(code).strip()
@@ -337,7 +337,25 @@ def smooth_tip_profile(params,fraction,points=None):
     return [(low+left+(x-low)*ratio,y*ratio) for x,y in xy]
 
 
+def tip_apex_handles(raw):
+    return tuple(json.loads(raw).get('tip_apex',(1.,1.))) if raw else (1.,1.)
+
+
 def base_smooth_tip_profile(params,fraction,points=None):
+    xy=unshaped_tip_profile(params,fraction,points)
+    handles=tip_apex_handles(params.get('tip_nodes',''))
+    if not 0<fraction<1 or handles==(1.,1.):return xy
+    low=min(x for x,_ in xy)
+    high=max(x for x,_ in xy)
+    center=low+(high-low)*tip_center_percentage(params)/100
+    # Zero value and slope at the root preserve both join tangents.
+    weight=fraction*fraction
+    left=(low-center)*weight*(handles[0]-1)
+    right=(high-center)*weight*(handles[1]-1)
+    return [(x+left+(right-left)*(x-low)/(high-low),y) for x,y in xy]
+
+
+def unshaped_tip_profile(params,fraction,points=None):
     """Punta NACA, raccordo tangente iniziale e calotta tonda verso un vertice."""
     n=points or max(80,params['points']);p=dict(params,points=n)
     f=max(0.,min(1.,fraction));scale=math.sqrt(max(0.,1-f*f))
@@ -359,17 +377,16 @@ def base_smooth_tip_profile(params,fraction,points=None):
         return [(pivot+(x-q)*chord*scale+correction*((rx-px)/h-(x-q)*dc),
                  y*chord*scale+correction*((ry-py)/h-y*dc))
                 for (x,y),(rx,ry),(px,py) in zip(profile,root,previous)]
-    # Hermite al primo quarto: stessa posizione e tangente della semiala.
-    if f<.25:
-        duration=length*.25;t=f/.25;end_scale=math.sqrt(1-.25**2)
+    # Spread the incoming tangent correction along the rounded tip.
+    # Its value and derivative both vanish at the tip vertex.
+    if 0<f<1:
         h=min(.01,p['span']/10000);z=p['span']-h;ratio=z/p['span']
         previous_chord,previous_lead,_=planform_section(p,z)
         previous=[(previous_lead+x*previous_chord,y*previous_chord) for x,y in section_profile(p,z,te/previous_chord)]
         root=[(lead+x*chord,y*chord) for x,y in profile]
-        target=[(pivot+(x-q)*chord*end_scale,y*chord*end_scale) for x,y in profile]
-        d_end=[((x-q)*chord*(-.25/end_scale)/length,y*chord*(-.25/end_scale)/length) for x,y in profile]
-        h00=2*t**3-3*t*t+1;h10=t**3-2*t*t+t;h01=-2*t**3+3*t*t;h11=t**3-t*t
-        xy=[tuple(h00*a+h10*duration*(a-b)/h+h01*c+h11*duration*d for a,b,c,d in zip(a0,b0,c0,d0)) for a0,b0,c0,d0 in zip(root,previous,target,d_end)]
+        correction=length*f*(1-f)**2
+        xy=[(x+correction*(rx-px)/h,y+correction*(ry-py)/h)
+            for (x,y),(rx,ry),(px,py) in zip(xy,root,previous)]
     # La calotta conserva il profilo NACA fino al vertice. La contrazione
     # ellittica chiude la superficie senza una faccia terminale e senza
     # modificare separatamente corda o spessore nell'ultimo tratto.

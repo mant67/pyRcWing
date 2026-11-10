@@ -1,11 +1,45 @@
 """Horizontal tip preview and geometric starting values; no change to CAD rules."""
-# File revision: 2
+# File revision: 4
 import math
 import tkinter as tk
 from tkinter import ttk
 from core import (airfoil_tip_code, elliptical_planform, planform_parameters,
-    planform_section, planform_outline, smooth_tip_sections, smooth_tip_profile,
+    planform_section, planform_outline, smooth_tip_sections, smooth_tip_profile, base_smooth_tip_profile,
     tip_center_percentage, washout_point, profile_thickness_ratio)
+
+
+def tip_planform_edges(p,edited=True,fractions=None):
+    """Project the tip onto the nominal planform with matching join tangents."""
+    length=p['tip_length']
+    def bounds(profile):
+        xs=[x for x,_ in profile]
+        return min(xs),max(xs)
+
+    span=p['span']
+    h=min(.001,span/100000)
+    chord,lead,_=planform_section(p,span)
+    prev_chord,prev_lead,_=planform_section(p,span-h)
+    nominal=(lead,lead+chord)
+    incoming=((lead-prev_lead)/h,(lead+chord-prev_lead-prev_chord)/h)
+    actual=bounds(base_smooth_tip_profile(p,0.,points=80))
+    step=1e-6
+    next_bounds=bounds(base_smooth_tip_profile(p,step,points=80))
+    profile=smooth_tip_profile if edited else base_smooth_tip_profile
+    join=.125
+    if fractions is None:
+        fractions={f for f,_ in smooth_tip_sections(p)}
+        fractions.update(join*i/8 for i in range(1,9))
+        fractions.update(join/2**i for i in range(4,10))
+    edges=[[],[]]
+    for f in sorted(fractions):
+        x_values=bounds(profile(p,f,points=80))
+        t=min(1.,f/join)
+        for side,x in enumerate(x_values):
+            shift=nominal[side]-actual[side]
+            slope=incoming[side]-(next_bounds[side]-actual[side])/(step*length)
+            correction=(1-t)**2*((1+2*t)*shift+t*join*length*slope)
+            edges[side].append((f,x+correction,span+f*length))
+    return edges
 
 
 def tip_suggestion(values):
@@ -85,11 +119,18 @@ class TipEditor:
         body=planform_outline(p);high=dict(p,points=80);tip=[]
         chord,lead,_=planform_section(p,p['span'])
         if p['elliptical_tip']:
-            edges=[]
-            for f,_ in smooth_tip_sections(p):
-                xy=smooth_tip_profile(high,f,points=80)
-                edges.append((p['span']+p['tip_length']*f,min(x for x,y in xy),max(x for x,y in xy)))
-            tip=[(z,a) for z,a,b in edges]+[(z,b) for z,a,b in reversed(edges)]
+            leading,trailing=tip_planform_edges(high)
+            tip=[(z,x) for _,x,z in leading]+[(z,x) for _,x,z in reversed(trailing)]
+            middle=len(body)//2
+            span=p['span']
+            start=body[middle-2][0]
+            join_rows=[]
+            for i in range(1,10):
+                z=span-(span-start)/2**i
+                c_at_z,le_at_z,_=planform_section(p,z)
+                join_rows.append((z,le_at_z,le_at_z+c_at_z))
+            body=(body[:middle-1]+[(z,le) for z,le,_ in join_rows]+body[middle-1:middle+1]
+                  +[(z,te) for z,_,te in reversed(join_rows)]+body[middle+1:])
         outline=body+tip;xs=[x for z,x in outline];height_span=max(xs)-min(xs)
         total=p['span']+(p['tip_length'] if p['elliptical_tip'] else 0.)
         if tracing:
