@@ -1,5 +1,5 @@
 """Horizontal aileron editor, from the existing nominal export projections."""
-# File revision: 2
+# File revision: 4
 import json
 import math
 from core import (aileron_parameters,aileron_axial_bounds,aileron_cap_parameters,aileron_hinge,
@@ -54,7 +54,6 @@ class AileronEditor:
     def __init__(self,owner,canvas=None):
         self.owner=owner;self.app=owner.app;self.canvas=canvas if canvas is not None else owner.canvases['aileron']
         self.handles={};self.view=None;self.detail_view=None;self.drag=None;self.data=None;self.body_cache=None;self.syncing=False
-        self.canvas.bind('<ButtonPress-1>',self.press);self.canvas.bind('<B1-Motion>',self.motion);self.canvas.bind('<ButtonRelease-1>',self.release)
         if canvas is not None:return
         self.app.aileron_root_distance.trace_add('write',self.distance_changed)
         for key in ('inizio_alettone','gioco_alettone_radice'):self.app.vars[key].trace_add('write',self.model_distance_changed)
@@ -131,6 +130,11 @@ class AileronEditor:
         c.create_polygon(view.coords(body),fill='' if tracing else '#dbeafe',
                          outline='#2563eb' if tracing else '#64748b',width=2 if tracing else 1,tags='aileron_wing')
         self.owner.note(c,16,10,'Alettone · Radice a sinistra, estremità a destra',left_right-20)
+        if tracing and p['elliptical_tip']:
+            span=p['span']
+            lead,tail=at(data['body_rows'],span)
+            c.create_line(*view.xy(lead,span),*view.xy(tail,span),fill='#2563eb',
+                          width=2,dash=(5,4),tags='aileron_tip_limit')
         if not a:
             self.drag=None
             self.owner.note(c,16 if tracing else w*.51,60,'Alettone disattivato.',w*.46);return
@@ -139,12 +143,12 @@ class AileronEditor:
         z0,z1=bounds['part_start'],bounds['part_end'];zm=(z0+z1)/2
         x0,x1=at(rows,z0),at(rows,z1);xm=at(rows,zm)
         points={'start':(x0[1],z0),'end':(x1[1],z1),'width_root':(x0[0],z0),'width_tip':(x1[0],z1),'move':((xm[0]+xm[1])/2,zm)}
-        self.handles={key:view.xy(*point) for key,point in points.items()}
+        if tracing:self.handles={key:view.xy(*point) for key,point in points.items()}
         for key,(x,y) in self.handles.items():c.create_oval(x-6,y-6,x+6,y+6,fill='#ea580c',outline='white',width=2,tags=('aileron_handle',key))
         low=min(x for x,z in body)-22/view.scale
         self.dimension(c,view.xy(low,0.),view.xy(low,z0),'R','#15803d',dy=-12)
         if not tracing:self.detail(c,data,w*.51+10,w-20,h)
-        self.owner.note(c,16,h-46,'Estremi: lunghezza · lato cerniera: larghezze · centro: sposta.',left_right-28)
+        if tracing:self.owner.note(c,16,h-46,'Estremi: lunghezza · lato cerniera: larghezze · centro: sposta.',left_right-28)
         self.owner.note(c,16,h-23,'Bordo d’uscita vincolato all’ala · pianta senza washout.',left_right-28,color='#64748b')
 
     @staticmethod
@@ -159,7 +163,8 @@ class AileronEditor:
             if box:points=clipped_box(points,*box)
             if len(points)>=3:c.create_polygon(view.coords(points),**kwargs)
         if detail:polygon(data['body'],fill='#e2e8f0',outline='#94a3b8',tags='detail_wing')
-        polygon(data['cavity'],fill='' if tracing else 'white',outline='#64748b',dash=(4,3),tags='detail_cavity' if detail else 'aileron_cavity')
+        polygon(data['cavity'],fill='' if tracing else 'white',outline='#0284c7' if tracing else '#64748b',
+                width=2 if tracing else 1,dash=() if tracing else (4,3),tags='detail_cavity' if detail else 'aileron_cavity')
         polygon(data['part'],fill='' if tracing else '#fed7aa',outline='#c2410c',width=1.5,tags='detail_aileron' if detail else 'aileron_part')
         if data['caps']:
             thick=data['caps']['spessore'];b=data['bounds']
@@ -173,7 +178,7 @@ class AileronEditor:
         padx=max(2.,3*a['gioco_alettone']);padz=max(2.,a['gioco_alettone_radice'],a['gioco_alettone_estremita'])
         box=(min(xs)-padx,max(xs)+padx,min(zs)-padz,max(zs)+padz)
         corners=[(box[x],box[z]) for x,z in ((0,2),(0,3),(1,2),(1,3))]
-        view=HorizontalView((left+40,82,right-40,246),corners);self.detail_view=view
+        view=HorizontalView((left+45,55,right-45,h-204),corners);self.detail_view=view
         self.paint(c,view,data,box,True)
         self.owner.note(c,left,10,'Dettaglio reale in pianta · stessa scala sui due assi',right-left)
         z0,z1=b['part_start'],b['part_end'];r0,r1=at(rows,z0),at(rows,z1);mid=(z0+z1)/2;rm=at(rows,mid)
@@ -185,14 +190,30 @@ class AileronEditor:
         self.dimension(c,view.xy(xdim,z0),view.xy(xdim,z1),'A',green,dy=-13)
         self.dimension(c,view.xy(r0[0],z0-22/view.scale),view.xy(r0[1],z0-22/view.scale),'B',green,dx=-12)
         self.dimension(c,view.xy(r1[0],z1+22/view.scale),view.xy(r1[1],z1+22/view.scale),'C',green,dx=12)
-        ydim=max(xs)+14/view.scale
         open_root=b['cut_start']<data['body_rows'][0][0]-1e-8
         open_tip=b['cut_end']>data['body_rows'][-1][0]+1e-8
         root_edge=max(b['cut_start'],data['body_rows'][0][0]);tip_edge=min(b['cut_end'],data['body_rows'][-1][0])
-        self.dimension(c,view.xy(ydim,root_edge),view.xy(ydim,z0),'D',red,dy=12)
-        self.dimension(c,view.xy(ydim,z1),view.xy(ydim,tip_edge),'E',red,dy=12)
+        _,dim_y=view.xy(max(xs)+16/view.scale,mid)
+        for label,first,last,direction in (('D',root_edge,z0,-1),('E',z1,tip_edge,1)):
+            for z,sign in ((first,-1),(last,1)):
+                x,y=view.xy(at(data['body_rows'],z)[1],z)
+                c.create_line(x,y,x,dim_y+4,fill=red,dash=(2,2),tags=('aileron_dimension',label))
+                c.create_line(x+sign*10,dim_y,x,dim_y,arrow='last',arrowshape=(4,5,2),
+                              fill=red,tags=('aileron_dimension',label))
+            x,_=view.xy(0,first if direction<0 else last)
+            c.create_text(x+direction*15,dim_y,text=label,anchor='e' if direction<0 else 'w',
+                          fill=red,font=('Segoe UI',9,'bold'),tags=('aileron_dimension_label',label))
         front=data['hinge'](mid)-a['gioco_alettone']/2
-        self.dimension(c,view.xy(front,mid),view.xy(rm[0],mid),'F',red,dx=14)
+        fx,fy=view.xy(front,mid)
+        _,part_y=view.xy(rm[0],mid)
+        for y in (fy,part_y):
+            c.create_line(fx-4,y,fx+4,y,fill=red,tags=('aileron_dimension','F'))
+        c.create_line(fx,fy,fx,part_y,fill=red,tags=('aileron_dimension','F'))
+        label_x=fx+18
+        c.create_line(fx+4,(fy+part_y)/2,label_x,dim_y-7,label_x,dim_y-4,
+                      fill=red,dash=(2,2),tags=('aileron_dimension','F'))
+        c.create_text(label_x,dim_y+1,text='F',fill=red,font=('Segoe UI',9,'bold'),
+                      tags=('aileron_dimension_label','F'))
         entries=(('R',f"Distanza radice {z0:g} mm",green),
                  ('A',f"Lunghezza {z1-z0:g} mm\n(nominale {a['lunghezza_alettone']:g})",green),
                  ('B',f"Radice {r0[1]-r0[0]:.3g} mm\n(impostata {a['larghezza_alettone_radice']:g})",green),
@@ -202,8 +223,8 @@ class AileronEditor:
                  ('F',f"Cerniera in pianta {rm[0]-front:.3g} mm\n(impostato {a['gioco_alettone']:g})",red),
                  ('G',f"Chiusure {data['caps']['spessore']:g} mm" if data['caps'] else 'Chiusure disattivate','#1d4ed8'))
         for i,(label,text,color) in enumerate(entries):
-            c.create_text(left+(right-left)/2*(i%2),292+34*(i//2),anchor='nw',text=label+' · '+text,width=(right-left)/2-6,fill=color,font=('Segoe UI',9),tags=('aileron_legend','legend_'+label))
-        self.owner.note(c,left,443,'Quote reali in mm. Ai bordi aperti D/E sono margini; F include lo smusso in pianta a metà alettone.',right-left,color='#64748b')
+            c.create_text(left+(right-left)/2*(i%2),h-158+31*(i//2),anchor='nw',text=label+' · '+text,width=(right-left)/2-6,fill=color,font=('Segoe UI',9),tags=('aileron_legend','legend_'+label))
+        self.owner.note(c,left,h-29,'Quote reali in mm. Ai bordi aperti D/E sono margini; F include lo smusso in pianta a metà alettone.',right-left,color='#64748b')
 
     def press(self,event):
         if self.app.generating or self.view is None or not self.handles:return
@@ -215,15 +236,19 @@ class AileronEditor:
         if self.drag is None or self.app.generating:return
         key,p,a,x,y,view=self.drag;dz=(event.x-x)/view.scale;dx=(event.y-y)/view.scale
         start=a['inizio_alettone'];end=start+a['lunghezza_alettone'];wr=a['larghezza_alettone_radice'];wt=a['larghezza_alettone_estremita'];total=self.data['body_rows'][-1][0]
+        if p['elliptical_tip']:
+            total=min(total,p['span']-a['gioco_alettone_estremita']/2)
         minimum=(a['gioco_alettone_radice']+a['gioco_alettone_estremita'])/2+4*p['skin']+.01
         caps=aileron_cap_parameters(p)
         if caps:minimum=max(minimum,2*caps['spessore']+(a['gioco_alettone_radice']+a['gioco_alettone_estremita'])/2+.01)
         ns,ne=start,end
-        if key=='move':ns=max(0.,min(total-(end-start),start+dz));ne=ns+end-start
+        if key=='move':
+            ns=max(0.,min(total-(end-start),start+dz));ne=min(total,ns+end-start)
         elif key=='start':ns=max(0.,min(end-minimum,start+dz))
-        elif key=='end':ne=max(start+minimum,min(total,end+dz))
+        elif key=='end':ne=min(total,max(start+minimum,end+dz))
         margin=2*p['skin']+a['gioco_alettone']+.01
         if key in ('move','start','end'):
+            if ne-ns<minimum-1e-8 or ne>total+1e-8:return
             def valid(s,e):
                 return wing_section_at(p,s)[0]>wr+margin and wing_section_at(p,e)[0]>wt+margin
             if not valid(ns,ne):
@@ -233,6 +258,7 @@ class AileronEditor:
                     if valid(start+(ns-start)*f,end+(ne-end)*f):lo=f
                     else:hi=f
                 ns,ne=start+(ns-start)*lo,end+(ne-end)*lo
+                if ne>total+1e-8:return
             self.app.vars['inizio_alettone'].set(f'{ns:.8f}');self.app.vars['lunghezza_alettone'].set(f'{ne-ns:.8f}')
         else:
             z=start if key=='width_root' else end;old=wr if key=='width_root' else wt

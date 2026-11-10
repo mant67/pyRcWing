@@ -1,25 +1,59 @@
 """Scasso servo accessibile dall'intradosso e battuta per un futuro coperchio."""
+# File revision: 2
+import json
 import math
+from pathlib import Path
 from planform import planform_section
 
 # Ingombri iniziali indicativi, non specifiche universali associate al peso.
 # Assi nominali: X larghezza, Y altezza, Z lunghezza lungo l'apertura.
 SERVO_PRESETS={1:(8.5,16.,20.),2:(11.,22.,22.),3:(12.,24.,23.)}
+SERVO_NAMES={'1':'3.7g','2':'5g','3':'9g'}
+SERVO_SIZE_FIELDS=('servo_width_mm','servo_height_mm','servo_length_mm')
+SERVO_PRESET_FIELDS=(*SERVO_SIZE_FIELDS,'servo_clearance_mm','servo_lid_lip_mm','servo_lid_depth_mm')
+SERVO_CATALOG_PATH=Path(__file__).resolve().parent/'preferences'/'servo.json'
 SERVO_DEFAULTS=dict(servo_type=1,servo_dist_root_mm=100.,servo_dist_le_mm=64.,
     servo_rotate_z_deg=-7.,servo_rotate_y_deg=45.,servo_dist_depth_mm=10.,servo_clearance_mm=.3,
     servo_lid_lip_mm=2.,servo_lid_depth_mm=.8)
+
+
+def load_servo_catalog(path=SERVO_CATALOG_PATH):
+    if path is None or not path.is_file():
+        return {name:dict(zip(SERVO_PRESET_FIELDS,(*size,.3,2.,.8)))
+                for name,size in zip(SERVO_NAMES.values(),SERVO_PRESETS.values())}
+    values=json.loads(path.read_text(encoding='utf-8-sig'))
+    if not isinstance(values,dict) or not values:
+        raise ValueError('Il catalogo servo deve contenere almeno un modello.')
+    for name,fields in values.items():
+        validate_servo_preset(name,fields)
+    return values
+
+
+def validate_servo_preset(name,fields):
+    if not name or name!=name.strip() or len(name)>100 or name in SERVO_NAMES:
+        raise ValueError(f'Nome servo non valido: {name!r}.')
+    if not isinstance(fields,dict) or set(fields)!=set(SERVO_PRESET_FIELDS):
+        raise ValueError(f'Parametri mancanti o sconosciuti per il servo {name}.')
+    for key,value in fields.items():
+        if (type(value) not in (int,float) or not math.isfinite(value) or value<0
+                or (key!='servo_clearance_mm' and value==0)
+                or (key=='servo_lid_depth_mm' and value<.2)):
+            raise ValueError(f'Valore non valido per {name}: {key}.')
 
 
 def servo_parameters(params):
     if str(params.get('create_servo_void',False)).lower() not in ('1','true','on','yes'):return None
     axis=str(params.get('servo_rotation_axis','z')).lower().strip()
     if axis not in ('z','y'):raise ValueError('Scegli una sola modalità di rotazione servo: asse Z oppure in pianta (asse Y).')
-    s={key:float(str(params.get(key,value)).replace(',','.')) for key,value in SERVO_DEFAULTS.items() if key not in ('servo_rotate_z_deg','servo_rotate_y_deg')}
+    s={key:float(str(params.get(key,value)).replace(',','.')) for key,value in SERVO_DEFAULTS.items() if key not in ('servo_type','servo_rotate_z_deg','servo_rotate_y_deg')}
     for key,active in (('servo_rotate_z_deg',axis=='z'),('servo_rotate_y_deg',axis=='y')):
         s[key]=float(str(params.get(key,SERVO_DEFAULTS[key])).replace(',','.')) if active else 0.
-    if s['servo_type'] not in SERVO_PRESETS:raise ValueError('Tipo servo richiesto: 1=3,7 g, 2=5 g, 3=9 g.')
-    s['servo_type']=int(s['servo_type']);width,height,length=SERVO_PRESETS[s['servo_type']]
-    for key,value in (('servo_width_mm',width),('servo_height_mm',height),('servo_length_mm',length)):
+    model=str(params.get('servo_type',SERVO_DEFAULTS['servo_type'])).strip()
+    legacy=next((key for key,name in SERVO_NAMES.items() if model in (key,name)),None)
+    if legacy is None and (not model or any(key not in params for key in SERVO_SIZE_FIELDS)):
+        raise ValueError('Il modello servo personalizzato richiede le dimensioni del corpo.')
+    sizes=SERVO_PRESETS[int(legacy)] if legacy else (None,)*3
+    for key,value in zip(SERVO_SIZE_FIELDS,sizes):
         s[key]=float(str(params.get(key,value)).replace(',','.'))
     if not all(math.isfinite(v) for v in s.values()):raise ValueError('I parametri servo devono essere numeri finiti.')
     if min(s[k] for k in ('servo_width_mm','servo_height_mm','servo_length_mm','servo_lid_lip_mm','servo_lid_depth_mm'))<=0:
@@ -32,6 +66,7 @@ def servo_parameters(params):
     if s['servo_lid_lip_mm']<2*float(str(params.get('larghezza_linea_vaso',.55)).replace(',','.')):
         raise ValueError('Battuta servo troppo stretta: usa almeno due larghezze linea.')
     s['servo_rotation_axis']=axis
+    s['servo_type']=SERVO_NAMES.get(model,model)
     return s
 
 

@@ -1,5 +1,5 @@
 """Horizontal editable planform shared with manual geometry fields."""
-# File revision: 6
+# File revision: 9
 import json
 import math
 import tkinter as tk
@@ -8,6 +8,7 @@ from airfoil_editor import AirfoilEditor, LIBRARY_PATH, profile_from_controls
 from planform import *
 
 DIMENSIONS=('span','root_chord','tip_chord','sweep','ellipse_center_perc')
+NODE_TYPE_LABELS=('Curva–curva','Retta–retta','Retta–curva','Curva–retta')
 
 
 def local_slope(edge,fraction):
@@ -16,11 +17,11 @@ def local_slope(edge,fraction):
     return (edge(b)-edge(a))/(b-a)
 
 
-def draw_node_tangent(canvas,center,slope,span,scale,lengths):
+def draw_node_tangent(canvas,center,slope,span,scale,lengths,directions=(-1,1)):
     x,y=center
     grips={direction:(x+direction*span*scale*length,y+direction*slope*scale*length)
-           for direction,length in zip((-1,1),lengths)}
-    canvas.create_line(*grips[-1],*grips[1],fill='#7c3aed',width=2)
+           for direction,length in zip((-1,1),lengths) if direction in directions}
+    if grips:canvas.create_line(*grips.get(-1,center),*grips.get(1,center),fill='#7c3aed',width=2)
     for gx,gy in grips.values():
         canvas.create_oval(gx-5,gy-5,gx+5,gy+5,fill='#7c3aed',outline='white',width=2)
     return grips
@@ -89,7 +90,7 @@ def handle_changes(p,key,dx,dy):
 
 class PlanformEditor:
     def __init__(self,app,parent,controls):
-        self.app=app;self.drag=None;self.handles={};self.transform=None
+        self.app=app
         app.vars['planform']=tk.StringVar(value='trapezoidal')
         app.vars['ellipse_center_perc']=tk.StringVar(value='50')
         app.vars['planform_notes']=tk.StringVar()
@@ -104,12 +105,9 @@ class PlanformEditor:
         self.note=ttk.Label(box,wraplength=360);self.note.pack(fill='x')
         self.tracing_editor=PlanformTracingEditor(app,self)
         ttk.Button(box,text='Editor pianta…',command=self.tracing_editor.open).pack(anchor='w',pady=(6,0))
-        self.canvas=tk.Canvas(parent,height=300,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
-        self.canvas.pack(fill='x',pady=(0,10))
+        self.canvas=tk.Canvas(parent,height=220,width=300,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
+        self.canvas.pack(fill='both',expand=True,padx=4,pady=4)
         self.canvas.bind('<Configure>',lambda _:self.draw())
-        self.canvas.bind('<ButtonPress-1>',self.press)
-        self.canvas.bind('<B1-Motion>',self.motion)
-        self.canvas.bind('<ButtonRelease-1>',self.release)
         for key in ('planform','ellipse_center_perc','root_chord','tip_chord','span','sweep','airfoil_tip','create_ribs','nervature_specchiate_ala','rib_pitch','rib_angle','planform_nodes'):
             app.vars[key].trace_add('write',self.changed)
         self.changed()
@@ -123,7 +121,7 @@ class PlanformEditor:
         self.center_entry.configure(state='normal' if elliptical else 'disabled')
         self.app.geometry_labels['sweep'].configure(text='Freccia linea centrale (mm)' if elliptical else 'Freccia bordo attacco (mm)')
         self.app.geometry_labels['tip_chord'].configure(text='Corda terminale ellisse (mm)' if elliptical else 'Corda estremità (mm)')
-        self.note.configure(text=('Ellisse con corda terminale finita per la stampa. Le maniglie sui due bordi si spostano indipendentemente. Punta aggiuntiva disponibile.' if elliptical else 'Bordi rettilinei. La punta separata è disponibile nel pannello Punta.'))
+        self.note.configure(text=('Ellisse con corda terminale finita per la stampa. Punta aggiuntiva disponibile.' if elliptical else 'Bordi rettilinei. La punta separata è disponibile nel pannello Punta.'))
         if hasattr(self.app,'tip_check'):
             self.app.tip_check.configure(state='normal')
             enabled=self.app.vars['elliptical_tip'].get()=='1'
@@ -131,19 +129,17 @@ class PlanformEditor:
         self.draw();self.app.draw_profile_preview()
 
     def draw(self):
-        c=self.canvas;c.delete('all');self.handles={}
-        w=max(320,c.winfo_width());h=300
+        c=self.canvas;c.delete('all')
+        w=max(160,c.winfo_width());h=max(160,c.winfo_height())
         try:p=self.parameters()
         except (ValueError,TypeError,IndexError) as exc:
-            self.transform=None;c.create_text(18,25,text=str(exc),anchor='nw',width=w-36,fill='#b91c1c',tags='planform_error');return
+            c.create_text(18,25,text=str(exc),anchor='nw',width=w-36,fill='#b91c1c',tags='planform_error');return
         outline=planform_outline(p);ys=[y for z,y in outline]
-        if self.drag is None:
-            scale=min((w-170)/p['span'],(h-110)/max(1,max(ys)-min(ys)))
-            self.transform=(80,52-min(ys)*scale,scale)
-        self.handles=self.draw_outline(c,p,self.transform,w,h)
+        scale=min((w-136)/p['span'],(h-130)/max(1,max(ys)-min(ys)))
+        self.draw_outline(c,p,(68,70-min(ys)*scale,scale),w,h,editable=False)
 
     @staticmethod
-    def draw_outline(c,p,transform,w,h,background=False):
+    def draw_outline(c,p,transform,w,h,background=False,editable=True):
         handles={}
         ox,oy,scale=transform
         def xy(z,y):return ox+z*scale,oy+y*scale
@@ -151,7 +147,7 @@ class PlanformEditor:
         c.create_polygon(coords,fill='' if background else '#dbeafe',outline='#2563eb',width=2,tags='planform_outline')
         if str(p.get('nervature_specchiate_ala','0')).lower() in ('1','true','yes','on'):
             if str(p.get('create_ribs','1')).lower() in ('1','true','yes','on'):
-                c.create_text(12,18,anchor='w',text='Nervature schematiche: viola = originali · verde = specchiate',fill='#475569',tags='rib_legend')
+                c.create_text(12,18,anchor='nw',width=w-24,text='Nervature schematiche: viola = originali · verde = specchiate',fill='#475569',tags='rib_legend')
             try:
                 for family,points in planform_rib_segments(p):
                     c.create_line(*[v for point in points for v in xy(*point)],fill=('#7c3aed' if family=='original' else '#059669'),width=1,tags=('rib_trace',family))
@@ -159,32 +155,39 @@ class PlanformEditor:
         ch,le,_=planform_section(p,p['span']);q=float(str(p.get('ellipse_center_perc',50)).replace(',','.'))/100 if elliptical_planform(p) else 0
         axis=p['sweep']+p['root_chord']*q
         if elliptical_planform(p):c.create_line(*xy(0,p['root_chord']*q),*xy(p['span'],axis),dash=(4,3),fill='#94a3b8')
+        if not editable:
+            root_x,root_y=xy(0,0)
+            _,root_tail=xy(0,p['root_chord'])
+            tip_x,tip_y=xy(p['span'],le)
+            _,tip_tail=xy(p['span'],le+ch)
+            dim_y=min(yy for _,yy in (xy(z,y) for z,y in planform_outline(p)))-13
+            ink='#334155'
+            for x,y in ((root_x,root_y),(tip_x,tip_y)):
+                c.create_line(x,y,x,dim_y-4,fill=ink,tags='planform_dimension')
+            c.create_line(root_x,dim_y,tip_x,dim_y,arrow='both',fill=ink,tags='planform_dimension')
+            c.create_text((root_x+tip_x)/2,dim_y-3,anchor='s',text=f"{p['span']:.2f} mm",fill=ink,tags='planform_dimension')
+            for x,top,bottom,chord,direction in ((root_x,root_y,root_tail,p['root_chord'],-1),(tip_x,tip_y,tip_tail,ch,1)):
+                offset=x+direction*15
+                for y in (top,bottom):
+                    c.create_line(x,y,offset+direction*4,y,fill=ink,tags='planform_dimension')
+                c.create_line(offset,top,offset,bottom,arrow='both',fill=ink,tags='planform_dimension')
+                c.create_text(offset+direction*4,(top+bottom)/2,anchor='e' if direction<0 else 'w',
+                              text=f'{chord:.2f}',fill=ink,tags='planform_dimension')
         items=[('root_chord',0,p['root_chord'],'Corda radice'),('tip_chord',p['span'],le+ch,'Bordo uscita'),('span',p['span']+28/scale,le+ch/2,'Apertura'),('sweep',p['span'],le,'Bordo attacco')]
         if elliptical_planform(p):items.append(('ellipse_center_perc',-28/scale,p['root_chord']*q,'Centro ellisse'))
         for key,z,y,label in items:
+            if not editable and key in ('root_chord','span'):continue
             x,yy=xy(z,y);handles[key]=(x,yy)
             if key=='span':c.create_line(*xy(p['span'],le+ch/2),x,yy,fill='#ea580c',dash=(2,2))
             if key=='ellipse_center_perc':c.create_line(*xy(0,p['root_chord']*q),x,yy,fill='#ea580c',dash=(2,2))
-            c.create_oval(x-6,yy-6,x+6,yy+6,fill='#ea580c',outline='white',width=2,tags=('handle',key))
-            c.create_text(x+(10 if z==0 else -10),yy-10,text=label,anchor='sw' if z==0 else 'se',fill='#9a3412',font=('Segoe UI',8))
-        c.create_text(12,h-40,anchor='w',text=f"Radice a sinistra · estremità a destra · semiala {p['span']:g} mm · corde {p['root_chord']:g} / {p['tip_chord']:g} mm",fill='#334155')
-        c.create_text(12,h-19,anchor='w',text='Trascina le maniglie arancioni oppure modifica i campi. Vista nominale, senza washout.',fill='#64748b')
+            if editable:c.create_oval(x-6,yy-6,x+6,yy+6,fill='#ea580c',outline='white',width=2,tags=('handle',key))
+            label_right=z==0 or (not editable and key=='ellipse_center_perc')
+            c.create_text(x+(10 if label_right else -10),yy-10,text=label,anchor='sw' if label_right else 'se',fill='#9a3412',font=('Segoe UI',8))
+        c.create_text(12,h-22,anchor='sw',width=w-24,text=f"Radice a sinistra · estremità a destra · semiala {p['span']:g} mm · corde {p['root_chord']:g} / {p['tip_chord']:g} mm",fill='#334155')
+        caption=('Trascina le maniglie arancioni oppure modifica i campi. Vista nominale, senza washout.'
+                 if editable else 'Vista nominale, senza washout.')
+        c.create_text(12,h-5,anchor='sw',width=w-24,text=caption,fill='#64748b')
         return handles
-
-    def press(self,event):
-        if getattr(self.app,'generating',False) or self.transform is None:return
-        nearest=min(self.handles,key=lambda k:math.hypot(event.x-self.handles[k][0],event.y-self.handles[k][1]),default=None)
-        if nearest and math.hypot(event.x-self.handles[nearest][0],event.y-self.handles[nearest][1])<=13:
-            self.drag=(nearest,self.parameters(),event.x,event.y)
-
-    def motion(self,event):
-        if self.drag is None:return
-        key,p,x0,y0=self.drag;scale=self.transform[2];dx=(event.x-x0)/scale;dy=(event.y-y0)/scale
-        for name,value in handle_changes(p,key,dx,dy).items():
-            self.app.vars[name].set(value)
-
-    def release(self,event):
-        self.drag=None;self.draw()
 
 
 class PlanformTracingEditor(AirfoilEditor):
@@ -371,6 +374,7 @@ class PlanformTracingEditor(AirfoilEditor):
         self.handles=self.owner.draw_outline(self.canvas,p,self.transform(),w,h,background=self.image is not None)
         ox,oy,scale=self.transform()
         edges=planform_nodes(self.nodes)
+        types=planform_node_types(self.nodes)
         trailing_end=trailing_end_settings(self.nodes)
         for side,nodes in enumerate(edges):
             for index,node in enumerate(nodes):
@@ -380,7 +384,7 @@ class PlanformTracingEditor(AirfoilEditor):
                 x,y=ox+z*scale,oy+(leading+side*chord+offset)*scale
                 self.handles[(side,index)]=(x,y)
                 self.canvas.create_oval(x-6,y-6,x+6,y+6,fill='#2563eb',outline='white',width=2)
-        if self.selected_node=='tip_chord' and edges[1]:
+        if self.selected_node=='tip_chord' and edges[1] and not straight_segments(types[1])[-1]:
             points=curve_controls(edges[1],trailing_end)
             length=segment_handles(points[-2],points[-1])[1]
             slope=local_slope(lambda f:planform_base_edge(p,1,f),1.)+points[-1][2]
@@ -394,9 +398,11 @@ class PlanformTracingEditor(AirfoilEditor):
             nodes=edges[side]
             end=trailing_end if side==1 else None
             fraction=nodes[index][0]
-            slope=local_slope(lambda f:planform_base_edge(p,side,f),fraction)+curve_offset(nodes,fraction,end)[1]
+            slope=local_slope(lambda f:planform_base_edge(p,side,f),fraction)+planform_edge_offset(p,side,nodes,types[side],fraction,end)[1]
+            straight=straight_segments(types[side])
+            directions=[direction for direction,segment in ((-1,index),(1,index+1)) if not straight[segment]]
             self.tangent_grips=draw_node_tangent(self.canvas,self.handles[self.selected_node],slope,
-                                                p['span'],scale,node_handle_lengths(nodes,index,end))
+                                                p['span'],scale,node_handle_lengths(nodes,index,end),directions)
 
     def add_geometry_menu(self,menu,event):
         menu.add_command(label=self.app.tr('Ripristina vista'),command=self.reset_view)
@@ -408,12 +414,28 @@ class PlanformTracingEditor(AirfoilEditor):
                  key=lambda key:math.dist(target,self.handles[key]),default=None)
         if node is not None and math.dist(target,self.handles[node])<=12:
             menu.add_separator()
+            current=planform_node_types(self.nodes)[node[0]][node[1]]
+            self.node_type_menu(menu,'Tipo di nodo',lambda mode:self.change_node_type(node,mode),current)
             menu.add_command(label=self.app.tr('Elimina nodo'),command=lambda:self.delete_node(node))
             return
         hit=self.edge_hit(target)
         if hit is not None:
             menu.add_separator()
-            menu.add_command(label=self.app.tr('Inserisci nodo'),command=lambda:self.insert_node(*hit))
+            self.node_type_menu(menu,'Inserisci nodo',lambda mode:self.insert_node(*hit,mode))
+
+    def node_type_menu(self,menu,label,command,current=None):
+        choices=tk.Menu(menu,tearoff=False)
+        for mode,title in zip(NODE_TYPES,NODE_TYPE_LABELS):
+            choices.add_command(label=self.app.tr(title),state='disabled' if mode==current else 'normal',
+                                command=lambda mode=mode:command(mode))
+        menu.add_cascade(label=self.app.tr(label),menu=choices)
+
+    def change_node_type(self,node,mode):
+        side,index=node
+        types=[list(edge) for edge in planform_node_types(self.nodes)]
+        types[side][index]=mode
+        self.selected_node=node
+        self.set_nodes(planform_nodes(self.nodes),types=types)
 
     def edge_hit(self,target):
         try:p=self.parameters()
@@ -433,9 +455,11 @@ class PlanformTracingEditor(AirfoilEditor):
                     best=(distance,(side,fraction))
         return best[1]
 
-    def set_nodes(self,nodes,trailing_end=None):
+    def set_nodes(self,nodes,trailing_end=None,types=None):
         previous=self.nodes
         values=dict(zip(PLANFORM_EDGES,nodes))
+        if types is None:types=planform_node_types(previous)
+        if any(mode!='cc' for edge in types for mode in edge):values['node_types']=types
         end=trailing_end_settings(previous) if trailing_end is None else trailing_end
         if end and nodes[1]:values['trailing_end']=end
         self.nodes=json.dumps(values,separators=(',',':')) if any(nodes) else ''
@@ -446,21 +470,29 @@ class PlanformTracingEditor(AirfoilEditor):
             return
         self.draw()
 
-    def insert_node(self,side,fraction):
+    def insert_node(self,side,fraction,mode='cc'):
         nodes=[list(edge) for edge in planform_nodes(self.nodes)]
+        types=[list(edge) for edge in planform_node_types(self.nodes)]
         end=trailing_end_settings(self.nodes) if side==1 else None
+        offset,slope_at_node=planform_edge_offset(self.parameters(),side,nodes[side],types[side],fraction,end)
         split_final=side==1 and nodes[1] and fraction>nodes[1][-1][0]
         slope=curve_controls(nodes[1],end)[-1][2] if split_final else None
         nodes[side]=insert_curve_node(nodes[side],fraction,end)
-        self.selected_node=(side,next(i for i,node in enumerate(nodes[side]) if node[0]==fraction))
-        self.set_nodes(nodes,(slope,nodes[1][-1][6]) if split_final else end)
+        index=next(i for i,node in enumerate(nodes[side]) if node[0]==fraction)
+        if any(value!='cc' for value in types[side]):
+            nodes[side][index]=[fraction,offset,slope_at_node,*nodes[side][index][3:]]
+        types[side].insert(index,mode)
+        self.selected_node=(side,index)
+        self.set_nodes(nodes,(slope,nodes[1][-1][6]) if split_final else end,types)
 
     def delete_node(self,node):
         side,index=node
         nodes=[list(edge) for edge in planform_nodes(self.nodes)]
+        types=[list(edge) for edge in planform_node_types(self.nodes)]
         del nodes[side][index]
+        del types[side][index]
         self.selected_node=None
-        self.set_nodes(nodes)
+        self.set_nodes(nodes,types=types)
 
     def press(self,event):
         if self.mode!='edit' or event.state & 0x0001:

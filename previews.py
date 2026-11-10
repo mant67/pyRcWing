@@ -1,5 +1,5 @@
 """Anteprime 2D leggere del wizard; nessuna modifica ai solidi esportati."""
-# File revision: 9
+# File revision: 16
 import math
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -10,7 +10,7 @@ from planform_ui import draw_node_tangent, local_slope, move_tangent_handle
 from sections import section_preview, clip_polygon
 from tip_ui import TipEditor, tip_planform_edges
 from spars_ui import SparEditor
-from aileron_ui import AileronEditor, HorizontalView
+from aileron_ui import AileronEditor, HorizontalView, projected_envelope, at
 from slots_ui import SlotsPreview
 
 
@@ -352,7 +352,7 @@ class WizardPreviews:
     def __init__(self,app):
         self.app=app;self.canvases={};self.pending=None;self.traced=set();self.last_error={}
         for key,index in (('tip',3),('spars',4),('aileron',5),('slots',6),('summary',10)):
-            canvas=tk.Canvas(app.pages[index],height=320 if key in ('tip','spars') else 570 if key=='slots' else 480 if key=='aileron' else 280,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
+            canvas=tk.Canvas(app.pages[index],height=320 if key in ('tip','spars','aileron') else 570 if key=='slots' else 280,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
             options=dict(fill='x',pady=(10,6))
             if key=='summary':options['before']=app.export_button.master
             canvas.pack(**options);self.canvases[key]=canvas
@@ -531,19 +531,110 @@ class WizardPreviews:
         self.note(c,12,h-35,status,w-24,color='#92400e' if not enabled or not q['spars'] and connector_ribs_enabled(q) else '#475569')
 
     def draw_summary(self,c,p,w,h):
-        self.note(c,16,9,'Vista d’insieme dei componenti configurati',w-32)
+        self.note(c,16,9,self.app.tr('Componenti in scala comune · quote in mm'),w-32)
+        cards=[]
+        columns=(0.,.46,.73,1.)
         for i,(component,title) in enumerate((('ala','Ala'),('alettone','Alettone'),('raccordo','Raccordo centrale'))):
-            left=w*i/3;right=w*(i+1)/3
-            self.note(c,left+18,34,title,right-left-30)
+            left,right=w*columns[i],w*columns[i+1]
+            self.note(c,left+16,38,self.app.tr(title),right-left-32)
             try:
                 q=dict(p,crea_asole_cerniere=False)
                 if component=='raccordo':
-                    if self.app.connector_vars['genera_raccordo_centrale'].get()!='1':raise ValueError('Disattivato')
+                    if self.app.connector_vars['genera_raccordo_centrale'].get()!='1':
+                        self.note(c,left+16,82,self.app.tr('Disattivato'),right-left-32)
+                        continue
                     q=self.connector_data(p)[1]
-                data=section_preview(q,component);view=View(c,(left+25,65,right-20,h-20),(data['xmin']-3,data['xmax']+3,-2,data['height']+2))
-                for poly in data['polygons']:view.polygon(poly,fill=('#fdba74' if component=='alettone' else '#bfdbfe'),outline='',tags='component_'+component)
-                for outline,color in zip(data.get('servo_outlines',[]),('#d97706','#b91c1c')):view.line(outline,fill=color,width=1.5)
+                data=section_preview(q,component)
+                cards.append((left,right,component,data))
             except (ValueError,KeyError,TypeError) as exc:self.note(c,left+20,90,str(exc),right-left-35)
+        if not cards:return
+        scale=min(min(max(1,right-left-110)/max(.01,d['height']),
+                      max(1,h-172)/max(.01,d['xmax']-d['xmin']))
+                  for left,right,_,d in cards)
+        for left,right,component,d in cards:
+            fill='#fdba74' if component=='alettone' else '#bfdbfe'
+            ink='#64748b'
+            length=d['height'];width=d['xmax']-d['xmin']
+            x0=(left+right-length*scale)/2-7
+            y0=(h-46-width*scale)/2
+            def xy(x,z):return x0+z*scale,y0+(x-d['xmin'])*scale
+            for poly in d['polygons']:
+                c.create_polygon(*[v for point in poly for v in xy(*point)],fill=fill,outline='',
+                                 tags='component_'+component)
+            for outline,color in zip(d.get('servo_outlines',[]),('#d97706','#b91c1c')):
+                c.create_line(*[v for point in outline for v in xy(*point)],fill=color,width=1.5)
+            x1=x0+length*scale;y1=y0+width*scale
+            def horizontal(a,b,y,value,label_offset):
+                c.create_line(a,y,b,y,arrow='both',arrowshape=(4,5,2),fill=ink,tags='summary_dimension')
+                for x in (a,b):c.create_line(x,y-4,x,y+4,fill='#94a3b8')
+                c.create_text((a+b)/2,y+label_offset,text=f'{value:.2f}',fill=ink,font=('Segoe UI',9))
+            def vertical(x,top,bottom,value,side):
+                dim_x=x+side*10
+                for y in (top,bottom):c.create_line(x,y,dim_x+side*4,y,fill='#94a3b8')
+                c.create_line(dim_x,top,dim_x,bottom,arrow='both',arrowshape=(4,5,2),fill=ink,tags='summary_dimension')
+                c.create_text(dim_x+side*5,(top+bottom)/2,text=f'{value:.2f}',
+                              anchor='w' if side>0 else 'e',fill=ink,font=('Segoe UI',9))
+            if component=='alettone':
+                _,rows=projected_envelope(d['polygons'])
+                root=at(rows,0.)[0]
+                tip=at(rows,length)[0]
+                diagonal=math.hypot(length,tip-root)
+                ax,ay=xy(root,0.)
+                bx,by=xy(tip,length)
+                # Offset the dimension perpendicular to the measured edge.
+                nx,ny=(tip-root)/diagonal,-length/diagonal
+                for x,y in ((ax,ay),(bx,by)):
+                    c.create_line(x+nx*3,y+ny*3,x+nx*20,y+ny*20,fill='#94a3b8')
+                c.create_line(ax+nx*15,ay+ny*15,bx+nx*15,by+ny*15,
+                              arrow='both',arrowshape=(4,5,2),fill=ink,tags='summary_dimension')
+                c.create_text((ax+bx)/2+nx*26,(ay+by)/2+ny*26,text=f'{diagonal:.2f}',
+                              angle=-math.degrees(math.atan2(tip-root,length)),fill=ink,
+                              font=('Segoe UI',9),tags='summary_aileron_diagonal')
+                for z,side in ((0.,-1),(length,1)):
+                    low,high=at(rows,z)
+                    x,top=xy(low,z)
+                    vertical(x,top,xy(high,z)[1],high-low,side)
+            else:
+                horizontal(x0,x1,y1+(29 if component=='ala' else 14),length,11)
+                if component=='raccordo':
+                    vertical(x1,y0,y1,width,1)
+                else:
+                    chord,lead,_=planform_section(p,p['span'])
+                    x,top=xy(lead,p['span'])
+                    vertical(x,top,xy(lead+chord,p['span'])[1],chord,1)
+                    vertical(x0,xy(0,0)[1],xy(p['root_chord'],0)[1],p['root_chord'],-1)
+                    a=aileron_parameters(p)
+                    if a:
+                        bounds=aileron_axial_bounds(a)
+                        start=max(0.,bounds['cut_start']);end=min(length,bounds['cut_end'])
+                        if end>start:
+                            hinge,_=aileron_hinge(p,a)
+                            for z in (start,end):
+                                dx,dy=xy(hinge(z)[0]-a['gioco_alettone']/2,z)
+                                c.create_line(dx,dy,dx,y1+13,fill='#94a3b8',dash=(2,2))
+                            horizontal(xy(0,start)[0],xy(0,end)[0],y1+9,end-start,10)
+                    self.summary_airfoils(c,p,left,right,h)
+            captions={'ala':'',
+                      'alettone':'Diagonale lato cerniera · larghezze agli estremi',
+                      'raccordo':'Proiezione in posizione di stampa'}
+            if captions[component]:
+                self.note(c,left+16,h-46,self.app.tr(captions[component]),right-left-32)
+
+    def summary_airfoils(self,c,p,left,right,h):
+        chords=(p['root_chord'],planform_section(p,p['span'])[0])
+        profiles=[[(x*chord,y*chord) for x,y in airfoil_profile(p,end,80)]
+                  for end,chord in zip(('root','tip'),chords)]
+        points=[point for profile in profiles for point in profile]
+        xmin=min(x for x,y in points);xmax=max(x for x,y in points)
+        ymin=min(y for x,y in points);ymax=max(y for x,y in points)
+        half=(right-left)/2
+        scale=min((half-32)/max(.01,xmax-xmin),22/max(.01,ymax-ymin))
+        for i,(profile,title,color,chord) in enumerate(zip(profiles,('Radice','Estremità'),('#2563eb','#ea580c'),chords)):
+            x0=left+i*half+16-xmin*scale
+            y0=h-20+(ymax+ymin)*scale/2
+            self.note(c,left+i*half+16,h-57,f'{self.app.tr(title)} · {chord:.2f} mm',half-24)
+            c.create_line(*[v for x,y in profile+[profile[0]] for v in (x0+x*scale,y0-y*scale)],
+                          fill=color,width=1.5,tags='summary_airfoil')
 
 
 def servo_depth_at_center(p,s):
@@ -569,36 +660,56 @@ def draw_servo_dimensions(c,s,left,right,p):
             c.create_line(x if horizontal else x-5,y-5 if horizontal else y,x if horizontal else x+5,y+5 if horizontal else y,fill=color)
         c.create_text((x0+x1)/2 if horizontal else x0+12,y0-12 if horizontal else (y0+y1)/2,text=label,fill=color,font=('Segoe UI',9,'bold'))
     poly=s['inner_polygon'];access_w=math.dist(poly[0],poly[1]);access_l=math.dist(poly[1],poly[2])
-    note(left,20,'Dettaglio accesso e battuta · vista locale apertura')
-    scale=min((right-left-125)/access_w,115/access_l)
+    note(left,12,'Dettaglio accesso e battuta · vista locale apertura')
+    lip_mm=s['servo_lid_lip_mm']
+    scale=min((right-left-100)/(access_w+2*lip_mm),52/(access_l+2*lip_mm))
     cx=(left+right)/2;ww=access_w*scale;hh=access_l*scale
-    x0=cx-ww/2;x1=cx+ww/2;y0=85;y1=y0+hh;lip=14
+    x0=cx-ww/2;x1=cx+ww/2;y0=49;y1=y0+hh;lip=lip_mm*scale
     c.create_rectangle(x0-lip,y0-lip,x1+lip,y1+lip,fill='#ffedd5',outline=orange,tags='servo_dimension_seat')
     c.create_rectangle(x0,y0,x1,y1,fill='#fee2e2',outline=red,tags='servo_dimension_access')
-    for x in (x0,x1):c.create_line(x,y0,x,55,fill=green)
-    dimension('A',x0,58,x1,58)
+    for x in (x0,x1):c.create_line(x,y0,x,33,fill=green)
+    dimension('A',x0,36,x1,36)
     for y in (y0,y1):c.create_line(x1,y,x1+35,y,fill=green)
     dimension('B',x1+30,y0,x1+30,y1)
-    dimension('C',x0-lip,y1+32,x0,y1+32,orange)
-    note(left,247,'Sezione schematica · battuta e fondo dello scasso')
-    sx=left+45;ex=right-48;step=sx+52;top=274;bottom=291;floor=326
-    c.create_polygon(sx,top,step,top,step,bottom,step+35,bottom,step+35,floor,ex,floor,ex,345,sx,345,fill='#e2e8f0',outline='#94a3b8',tags='servo_dimension_section')
-    c.create_line(sx,top,step,top,step,bottom,step+35,bottom,step+35,floor,ex,floor,fill=orange,width=2)
-    dimension('D',step+18,top,step+18,bottom,orange)
-    dimension('E',ex+22,top,ex+22,floor,green)
-    c.create_line(step,top,ex+25,top,fill=orange,dash=(2,2))
+    cy=y1+lip+9
+    for x,y in ((x0-lip,y1+lip),(x0,y1)):
+        c.create_line(x,y,x,cy+4,fill=orange)
+    c.create_line(x0-lip-9,cy,x0-lip,cy,arrow='last',arrowshape=(4,5,2),fill=orange,
+                  tags=('servo_dimension','servo_dimension_C'))
+    c.create_line(x0+9,cy,x0,cy,arrow='last',arrowshape=(4,5,2),fill=orange)
+    c.create_text(x0-lip-15,cy,text='C',anchor='e',fill=orange,font=('Segoe UI',9,'bold'))
+    note(left,122,'Sezione schematica · battuta e fondo dello scasso')
     depth=servo_depth_at_center(p,s)
-    note(left,350,'mm · E: intradosso → fondo al centro, lungo Y (prima del washout)')
+    top=151;floor=186
+    bottom=top+min(floor-top,max(4,(floor-top)*s['servo_lid_depth_mm']/max(.01,depth)))
+    half=min(82,(right-left-64)/2)
+    inner=half*.57
+    outer=half*.8
+    section=(cx-half,top,cx-outer,top,cx-outer,bottom,cx-inner,bottom,
+             cx-inner,floor,cx+inner,floor,cx+inner,bottom,cx+outer,bottom,
+             cx+outer,top,cx+half,top)
+    c.create_polygon(*section,cx+half,194,cx-half,194,fill='#e2e8f0',outline='#94a3b8',tags='servo_dimension_section')
+    c.create_line(*section,fill=orange,width=2)
+    c.create_line(cx-outer,top,cx+half+20,top,fill=orange,dash=(2,2))
+    dx=cx-half-14
+    c.create_line(dx-4,top,cx-half,top,fill=orange)
+    c.create_line(dx-4,bottom,cx-outer,bottom,fill=orange,dash=(2,2))
+    c.create_line(dx,top-10,dx,top,arrow='last',arrowshape=(4,5,2),fill=orange,
+                  tags=('servo_dimension','servo_dimension_D'))
+    c.create_line(dx,bottom+10,dx,bottom,arrow='last',arrowshape=(4,5,2),fill=orange)
+    c.create_text(dx-7,(top+bottom)/2,text='D',anchor='e',fill=orange,font=('Segoe UI',9,'bold'))
+    dimension('E',cx+half+18,top,cx+half+18,floor,green)
+    note(left,198,'mm · E: intradosso → fondo al centro, lungo Y (prima del washout)')
     entries=(('A',f'Larghezza accesso: {access_w:.2f}',green),
              ('B',f'Lunghezza accesso: {access_l:.2f}',green),
              ('C',f'Battuta per lato: {s["servo_lid_lip_mm"]:g}',orange),
              ('D',f'Profondità battuta: {s["servo_lid_depth_mm"]:g}',orange),
              ('E',f'Profondità totale al centro: {depth:.2f}',green))
     for i,(label,text,color) in enumerate(entries):
-        c.create_text(left+(right-left)/2*(i%2),374+19*(i//2),anchor='nw',text=label+' · '+text,fill=color,font=('Segoe UI',9),tags=('servo_dimension_legend','servo_legend_'+label))
-    note(left,440,f"Corpo X/Y/Z: {s['servo_width_mm']:g} / {s['servo_height_mm']:g} / {s['servo_length_mm']:g} · gioco per lato: {s['servo_clearance_mm']:g} mm")
-    note(left,462,f"Centro: radice {s['servo_dist_root_mm']:g} · bordo d’attacco {s['servo_dist_le_mm']:g} mm")
-    note(left,484,f"Offset verso l’intradosso: {s['servo_dist_depth_mm']:g} mm · coperchio da realizzare a parte")
+        c.create_text(left+(right-left)/2*(i%2),218+16*(i//2),anchor='nw',text=label+' · '+text,fill=color,font=('Segoe UI',9),tags=('servo_dimension_legend','servo_legend_'+label))
+    note(left,269,f"Corpo X/Y/Z: {s['servo_width_mm']:g} / {s['servo_height_mm']:g} / {s['servo_length_mm']:g} · gioco per lato: {s['servo_clearance_mm']:g} mm")
+    note(left,285,f"Centro: radice {s['servo_dist_root_mm']:g} · bordo d’attacco {s['servo_dist_le_mm']:g} mm")
+    note(left,301,f"Offset verso l’intradosso: {s['servo_dist_depth_mm']:g} mm · coperchio da realizzare a parte")
 
 
 def connector_rib_segments(xmin,xmax,height,pitch,angle,mirrored):

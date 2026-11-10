@@ -1,5 +1,5 @@
 """Anteprime nominali X/Z e sezionatura CAD, compatibili con la punta parametrica."""
-# File revision: 3
+# File revision: 5
 import copy
 import json
 import math
@@ -240,19 +240,27 @@ class SectioningPanel(ttk.Frame):
     def __init__(self,parent,app):
         super().__init__(parent);self.app=app;self.pack(fill='both',expand=True)
         self.cut_cache=None
+        self.snap_reference=None
+        self.snap_wing=tk.BooleanVar(value=True)
         self.cuts={c:[] for c in COMPONENTS};self.preview={};self.selected=None;self.dragging=False;self.cache={};self.canvases={};self.transforms={};self.controls=[];self.export_buttons={}
         ttk.Label(self,text='Sezionatura 2D',font=('Segoe UI',16,'bold')).pack(anchor='w')
-        ttk.Label(self,text='Vista X/Z della sagoma nominale, senza strutture interne. Click: aggiungi un piano; trascina una linea per spostarlo; tasto destro: elimina. Quote Z locali dalla base di ogni componente nella posizione di stampa.',wraplength=800).pack(anchor='w',pady=6)
+        ttk.Label(self,text='Vista X/Z nominale. Clic: seleziona. Doppio clic: aggiungi un piano. Trascina per spostare. Tasto destro: elimina. Quote Z dalla base di stampa di ciascun componente.',wraplength=800).pack(anchor='w',pady=6)
         previews=ttk.Frame(self);previews.pack(fill='x')
         for column,(component,name) in enumerate(COMPONENTS.items()):
             previews.columnconfigure(column,weight=1,uniform='preview')
             frame=ttk.LabelFrame(previews,text=name,padding=4);frame.grid(row=0,column=column,sticky='nsew',padx=3)
+            if component=='ala':
+                toggle=ttk.Checkbutton(previews,text='Aggancio ai riferimenti',variable=self.snap_wing,
+                                       command=self.release_drag)
+                toggle.grid(row=1,column=0,sticky='w',padx=4)
+                self.controls.append((toggle,'normal'))
             canvas=tk.Canvas(frame,height=300,width=250,background='#ffffff',highlightthickness=1,highlightbackground='#cbd5e1')
             canvas.pack(fill='both',expand=True);self.canvases[component]=canvas
             canvas.bind('<Configure>',lambda event,c=component:self.draw_shape(c))
             canvas.bind('<Button-1>',lambda event,c=component:self.click(c,event))
+            canvas.bind('<Double-Button-1>',lambda event,c=component:self.double_click(c,event))
             canvas.bind('<B1-Motion>',lambda event,c=component:self.drag(c,event))
-            canvas.bind('<ButtonRelease-1>',lambda event:setattr(self,'dragging',False))
+            canvas.bind('<ButtonRelease-1>',lambda event:self.release_drag())
             canvas.bind('<Button-3>',lambda event,c=component:self.delete_near(c,event))
         row=ttk.Frame(self);row.pack(fill='x',pady=8)
         self.target=tk.StringVar(value='ala')
@@ -372,11 +380,17 @@ class SectioningPanel(ttk.Frame):
         canvas=self.canvases[component];canvas.delete('cuts');data=self.preview.get(component,{})
         if 'height' not in data or component not in self.transforms:return
         left,bottom,scale,xmin=self.transforms[component];width=max(250,canvas.winfo_width())
+        if component=='ala' and self.snap_wing.get():
+            for z,_ in self.wing_references():
+                y=bottom-z*scale
+                canvas.create_line(18,y,width-12,y,fill='#94a3b8',dash=(4,4),tags=('cuts','snap_guide'))
         valid=[z for z in self.cuts[component] if 0<z<data['height']]
         for z in valid:
             y=bottom-z*scale;selected=self.selected==(component,z)
-            canvas.create_line(18,y,width-12,y,fill='#dc2626',width=3 if selected else 1.5,tags='cuts')
-            canvas.create_text(width-13,y-8,text=f'{z:.2f}',anchor='e',fill='#b91c1c',tags='cuts')
+            canvas.create_line(18,y,width-12,y,fill='#eab308' if selected else '#dc2626',
+                               width=3 if selected else 1.5,tags=('cuts','selected_cut') if selected else 'cuts')
+            canvas.create_text(width-13,y-8,text=f'{z:.2f}',anchor='e',
+                               fill='#854d0e' if selected else '#b91c1c',tags='cuts')
         limits=[0.]+sorted(valid)+[data['height']]
         if self.joiner_vars['JoinerEnabled'].get()=='1':
             try:length=float(self.joiner_vars['JoinerLength'].get().replace(',','.'))
@@ -389,6 +403,36 @@ class SectioningPanel(ttk.Frame):
         for index,(a,b) in enumerate(zip(limits,limits[1:]),1):
             y=bottom-(a+b)/2*scale
             canvas.create_text(width-12,y,text=f'P{index}',anchor='e',fill='#334155',tags='cuts')
+        canvas.tag_raise('selected_cut')
+        if component=='ala' and self.snap_reference is not None:
+            z,label=self.snap_reference
+            if self.selected==(component,z):
+                y=bottom-z*scale
+                canvas.create_line(18,y,width-12,y,fill='#15803d',width=3,tags=('cuts','snap_active'))
+                caption=f'{self.app.tr(label)} · Z {z:.3f} mm'
+                item=canvas.create_text(21,y-6,text=caption,anchor='sw',fill='#166534',tags='cuts')
+                box=canvas.bbox(item)
+                background=canvas.create_rectangle(*box,fill='white',outline='',tags='cuts')
+                canvas.tag_lower(background,item)
+
+    def wing_references(self):
+        data=self.preview.get('ala',{})
+        if 'height' not in data:return []
+        p=data['params']
+        a=aileron_parameters(p)
+        references=[]
+        if a:
+            bounds=aileron_axial_bounds(a)
+            references.extend(((bounds['cut_start'],'Inizio scasso alettone'),
+                               (bounds['cut_end'],'Fine scasso alettone')))
+        if tip_parameters(p)[0]:
+            references.append((p['span'],'Inizio punta alare'))
+        return [(z,label) for z,label in references if 0<z<data['height']]
+
+    def release_drag(self):
+        self.dragging=False
+        self.snap_reference=None
+        self.draw_cuts('ala')
 
     def event_z(self,component,event):
         if component not in self.transforms:return None
@@ -404,18 +448,35 @@ class SectioningPanel(ttk.Frame):
     def click(self,component,event):
         if self.app.generating or 'height' not in self.preview.get(component,{}):return
         self.target.set(component);near=self.nearest(component,event)
-        if near is None:
-            z=self.event_z(component,event)
-            try:self.insert(component,z)
-            except ValueError:return
-        else:self.selected=(component,near);self.position.set(f'{near:.2f}');self.update_table()
+        if near is None:return
+        self.selected=(component,near);self.position.set(f'{near:.2f}');self.update_table()
         self.dragging=True
+
+    def double_click(self,component,event):
+        if self.app.generating or 'height' not in self.preview.get(component,{}):return
+        if self.nearest(component,event) is not None:return
+        z=self.event_z(component,event)
+        if z is None:return
+        self.target.set(component)
+        try:self.insert(component,z)
+        except ValueError:return
 
     def drag(self,component,event):
         if self.app.generating or not self.dragging or not self.selected or self.selected[0]!=component:return
         z=self.event_z(component,event)
+        self.snap_reference=None
+        if component=='ala' and self.snap_wing.get():
+            _,bottom,scale,_=self.transforms[component]
+            candidates=sorted(self.wing_references(),key=lambda pair:abs(bottom-pair[0]*scale-event.y))
+            for reference in candidates:
+                if abs(bottom-reference[0]*scale-event.y)>8:break
+                self.snap_reference=reference
+                try:
+                    self.replace_selected(reference[0])
+                    return
+                except ValueError:self.snap_reference=None
         try:self.replace_selected(z)
-        except ValueError:return
+        except ValueError:self.draw_cuts(component)
 
     def insert(self,component,z):
         data=self.preview.get(component,{})

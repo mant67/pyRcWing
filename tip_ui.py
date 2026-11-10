@@ -1,5 +1,5 @@
 """Horizontal tip preview and geometric starting values; no change to CAD rules."""
-# File revision: 4
+# File revision: 5
 import math
 import tkinter as tk
 from tkinter import ttk
@@ -77,9 +77,6 @@ class TipEditor:
     def __init__(self,owner,canvas=None):
         self.owner=owner;self.app=owner.app;self.canvas=canvas if canvas is not None else owner.canvases['tip']
         self.handles={};self.view=None;self.drag=None
-        self.canvas.bind('<ButtonPress-1>',self.press)
-        self.canvas.bind('<B1-Motion>',self.motion)
-        self.canvas.bind('<ButtonRelease-1>',self.release)
         if canvas is not None:return
         box=ttk.LabelFrame(self.app.pages[3],text='Proposta dalla geometria dell’ala',padding=8)
         box.pack(fill='x',pady=(4,0),before=self.canvas)
@@ -154,19 +151,19 @@ class TipEditor:
         axis=lead+chord*tip_center_percentage(p)/100
         vertex=(p['span']+p['tip_length'],axis)
         c.create_line(*coords([(p['span'],axis),vertex]),fill='#7c3aed',dash=(4,3),tags='tip_axis')
-        # Length handle lies on the dimension line; centre handle is at the true tip vertex.
+        # The dimension follows the vertex while the vertex is dragged.
         dimension_y=min(xs)-24/scale
         a,b=xy(p['span'],dimension_y),xy(vertex[0],dimension_y)
         c.create_line(*a,*b,arrow='both',fill='#059669',width=2,tags='tip_length_dimension')
         c.create_line(*xy(vertex[0],dimension_y),*xy(*vertex),fill='#94a3b8',dash=(3,3))
-        self.handles={'tip_length':b,'wing_center_line_perc':xy(*vertex)}
+        if tracing:self.handles={'wing_center_line_perc':xy(*vertex)}
         for key,(x,y) in self.handles.items():
             c.create_oval(x-6,y-6,x+6,y+6,fill='#ea580c',outline='white',width=2,tags=('tip_handle',key))
         c.create_text(b[0]-8,b[1]-11,anchor='se',text=f"L {p['tip_length']:g} mm",fill='#059669')
         vx,vy=xy(*vertex)
         c.create_text(vx-8,vy+12,anchor='ne',text=f"Centro {tip_center_percentage(p):g}%",fill='#7c3aed')
         if tracing:
-            c.create_text(16,h-23,anchor='w',text='Maniglia L: trascina in orizzontale · Centro: trascina in verticale.',fill='#475569')
+            c.create_text(16,h-23,anchor='w',text=self.app.tr('Trascina l’apice: in orizzontale per la lunghezza, in verticale per il centro.'),fill='#475569')
             return
         self.owner.note(c,w*.61,48,f"Lunghezza aggiuntiva: {p['tip_length']:g} mm\nLinea centrale: {tip_center_percentage(p):g}% dal bordo d’attacco",w*.36)
         sections=[]
@@ -176,7 +173,6 @@ class TipEditor:
         pv=self.owner.profile_view(c,sections[0],(w*.61,120,w-20,h-45))
         for points,color in zip(sections[1:],('#f97316','#7c3aed')):pv.line(points+[points[0]],fill=color,width=2,tags='feature')
         self.owner.note(c,w*.61,h-35,'Sezioni alla base, al 60% e al 90% della punta',w*.36)
-        c.create_text(16,h-43,anchor='w',text='Maniglia L: trascina in orizzontale · Centro: trascina in verticale.',fill='#475569')
         c.create_text(16,h-23,anchor='w',text='Pianta senza washout · Le sezioni a destra mantengono il washout.',fill='#64748b')
 
     def press(self,event):
@@ -187,13 +183,15 @@ class TipEditor:
 
     def motion(self,event):
         if self.drag is None or self.app.generating:return
-        key,p,x,y,view=self.drag;scale=view[2]
-        if key=='tip_length':
-            width=float(str(p.get('larghezza_linea_vaso',.55)).replace(',','.'))
-            lower=max(2*p['line_width'],1.3*width)+.01
-            value=max(lower,p['tip_length']+(event.x-x)/scale)
-        else:value=max(0.,min(100.,tip_center_percentage(p)+(event.y-y)/scale/p['tip_chord']*100))
-        self.app.vars[key].set(f'{value:.2f}');self.owner.draw('tip')
+        _,p,x,y,view=self.drag
+        scale=view[2]
+        width=float(str(p.get('larghezza_linea_vaso',.55)).replace(',','.'))
+        lower=max(2*p['line_width'],1.3*width)+.01
+        length=max(lower,p['tip_length']+(event.x-x)/scale)
+        center=max(0.,min(100.,tip_center_percentage(p)+(event.y-y)/scale/p['tip_chord']*100))
+        self.app.vars['tip_length'].set(f'{length:.2f}')
+        self.app.vars['wing_center_line_perc'].set(f'{center:.2f}')
+        self.owner.draw('tip')
 
     def release(self,event):
         if self.drag is None:return

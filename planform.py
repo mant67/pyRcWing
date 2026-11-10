@@ -1,18 +1,19 @@
 """Shared nominal planform; all lengths in mm, span along Z."""
-# File revision: 5
+# File revision: 6
 import json
 import math
 from functools import lru_cache
 from airfoil_editor import profile_from_controls
 
 PLANFORM_EDGES=('leading','trailing')
+NODE_TYPES=('cc','ll','lc','cl')
 
 
 @lru_cache(maxsize=128)
 def planform_nodes(raw):
     """Each node stores span fraction and signed offset in mm from the base edge."""
     values=json.loads(raw) if raw else {}
-    if not isinstance(values,dict) or set(values)-set((*PLANFORM_EDGES,'trailing_end','tip_apex')):
+    if not isinstance(values,dict) or set(values)-set((*PLANFORM_EDGES,'trailing_end','tip_apex','node_types')):
         raise ValueError('Nodi della pianta non validi.')
     if 'tip_apex' in values:
         apex=values['tip_apex']
@@ -40,7 +41,26 @@ def planform_nodes(raw):
             edge_nodes.append(tuple(node))
             previous=fraction
         result.append(tuple(edge_nodes))
+    if 'node_types' in values:
+        types=values['node_types']
+        if (not isinstance(types,list) or len(types)!=2
+                or any(not isinstance(edge,list) or len(edge)!=len(nodes)
+                       or any(mode not in NODE_TYPES for mode in edge)
+                       for edge,nodes in zip(types,result))):
+            raise ValueError('Tipi di nodo della pianta non validi.')
     return tuple(result)
+
+
+@lru_cache(maxsize=128)
+def planform_node_types(raw):
+    nodes=planform_nodes(raw)
+    values=json.loads(raw) if raw else {}
+    return tuple(tuple(edge) for edge in values.get('node_types',[['cc']*len(edge) for edge in nodes]))
+
+
+def straight_segments(types):
+    modes=('cc',*types,'cc')
+    return tuple(a[1]=='l' or b[0]=='l' for a,b in zip(modes,modes[1:]))
 
 
 def node_fractions(p):
@@ -145,7 +165,10 @@ def bezier_parameter(points,fraction):
 def curve_offset(nodes,fraction,trailing_end=None):
     """Return offset and derivative in mm per unit of span fraction."""
     if not nodes or not 0<fraction<1:return 0.,0.
-    controls=curve_controls(nodes,trailing_end)
+    return evaluate_curve(curve_controls(nodes,trailing_end),fraction)
+
+
+def evaluate_curve(controls,fraction):
     for first,last in zip(controls,controls[1:]):
         a,y0,m0=first[:3]
         b,y1,m1=last[:3]
@@ -219,13 +242,42 @@ def base_planform_section(p,z):
     return chord,p['sweep']*f+(cr-chord)*q,1.
 
 
+def planform_edge_offset(p,side,nodes,types,fraction,end=None):
+    if all(mode=='cc' for mode in types) or not 0<fraction<1:
+        return curve_offset(nodes,fraction,end)
+    controls=curve_controls(nodes,end)
+    straight=straight_segments(types)
+
+    def base(f):
+        chord,lead,_=base_planform_section(p,f*p['span'])
+        return lead+side*chord
+
+    positions=[base(f)+offset for f,offset,*_ in controls]
+    slopes=[(b-a)/(last[0]-first[0]) for a,b,first,last in
+            zip(positions,positions[1:],controls,controls[1:])]
+    for i in range(1,len(controls)-1):
+        if straight[i-1]!=straight[i]:
+            f,y,_,left,right=controls[i]
+            h=min(1e-5,f/2,(1-f)/2)
+            slope=slopes[i-1 if straight[i-1] else i]-(base(f+h)-base(f-h))/(2*h)
+            controls[i]=(f,y,slope,left,right)
+    i=next(i for i,point in enumerate(controls[1:]) if fraction<=point[0])
+    if straight[i]:
+        h=min(1e-5,fraction/2,(1-fraction)/2)
+        return (positions[i]+(fraction-controls[i][0])*slopes[i]-base(fraction),
+                slopes[i]-(base(fraction+h)-base(fraction-h))/(2*h))
+    return evaluate_curve(controls[i:i+2],fraction)
+
+
 def planform_section(p,z):
     chord,lead,scale=base_planform_section(p,z)
     raw=p.get('planform_nodes','')
     leading,trailing=planform_nodes(raw)
+    leading_types,trailing_types=planform_node_types(raw)
     fraction=z/p['span']
-    shift=curve_offset(leading,fraction)[0]
-    return chord+curve_offset(trailing,fraction,trailing_end_settings(raw))[0]-shift,lead+shift,scale
+    shift=planform_edge_offset(p,0,leading,leading_types,fraction)[0]
+    tail=planform_edge_offset(p,1,trailing,trailing_types,fraction,trailing_end_settings(raw))[0]
+    return chord+tail-shift,lead+shift,scale
 
 
 def with_node_stations(p,levels):

@@ -1,17 +1,19 @@
 from mesh_checks import final_mesh_checks
 """Wizard di configurazione; la geometria risiede nel modulo core v91."""
-# File revision: 3
+# File revision: 8
 import tkinter as tk
 import copy
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import queue
 import threading
 from core import *
 from sections import SectioningPanel
 from previews import WizardPreviews, draw_servo_dimensions
+from aileron_ui import HorizontalView
+from servo import SERVO_NAMES, SERVO_CATALOG_PATH, SERVO_PRESET_FIELDS, load_servo_catalog, validate_servo_preset
 from planform_ui import PlanformEditor
 
-from configuration import ConfigurationMixin
+from configuration import ConfigurationMixin, write_configuration
 
 from menu import MenuMixin
 from airfoil_editor import AirfoilEditor
@@ -105,13 +107,19 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         self.vars['create_oval_holes'].trace_add('write',lambda *_:self.toggle_ribs())
         self.toggle_ribs()
         ttk.Label(right,text='Da 1 a 50 posizioni per nervatura, uniformi tra il 22% e il 74% della corda (una sola: 48%). Le posizioni incompatibili con bordi, sedi e scassi sono escluse. Percorso verificabile con PrusaSlicer abilitando la verifica opzionale.',wraplength=380).pack(anchor='w',pady=(6,0))
-        ttk.Label(root,text='Confronto dei profili in scala comune: radice, metà apertura, estremità · allineati al bordo d’attacco',wraplength=800).pack(anchor='w',pady=(8,0))
-        self.profile_canvas=tk.Canvas(root,height=175,width=750,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
-        self.profile_canvas.pack(fill='x',pady=8)
+        previews=ttk.Frame(root)
+        previews.pack(fill='x',pady=8)
+        previews.columnconfigure((0,1),weight=1,uniform='geometry_preview')
+        profiles=ttk.LabelFrame(previews,text='Profili alari')
+        profiles.grid(row=0,column=1,sticky='nsew',padx=(4,0))
+        self.profile_canvas=tk.Canvas(profiles,height=220,width=300,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
+        self.profile_canvas.pack(fill='both',expand=True,padx=4,pady=4)
         self.profile_canvas.bind('<Configure>',lambda event:self.draw_profile_preview())
         for key in ('airfoil','airfoil_tip','custom_airfoil_root','custom_airfoil_tip','root_chord','tip_chord'):self.vars[key].trace_add('write',lambda *_:self.draw_profile_preview())
         self.draw_profile_preview()
-        self.planform_editor=PlanformEditor(self,root,left)
+        plan=ttk.LabelFrame(previews,text='Pianta alare')
+        plan.grid(row=0,column=0,sticky='nsew',padx=(0,4))
+        self.planform_editor=PlanformEditor(self,plan,left)
         root=self.pages[2]
         box=ttk.LabelFrame(root,text='Svergolamento progressivo dell’ala (washout)',padding=12)
         box.pack(fill='x')
@@ -256,38 +264,60 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         self.servo_entries=[]
         ttk.Checkbutton(box,text='Predisponi scasso servo sull’intradosso',variable=self.vars['create_servo_void'],onvalue='1',offvalue='0',command=self.toggle_servo).grid(row=0,column=0,columnspan=4,sticky='w',pady=6)
         self.vars['servo_rotation_axis']=tk.StringVar(value='z')
-        self.vars['servo_type']=tk.StringVar(value='1')
-        ttk.Label(box,text='Tipo servo: 1 = 3,7 g; 2 = 5 g; 3 = 9 g').grid(row=1,column=0,sticky='w',pady=5)
-        self.servo_type_combo=ttk.Combobox(box,textvariable=self.vars['servo_type'],values=('1','2','3'),state='readonly',width=10)
+        try:
+            self.servo_catalog=load_servo_catalog()
+        except (OSError,ValueError) as exc:
+            self.servo_catalog=load_servo_catalog(path=None)
+            self.after_idle(lambda error=str(exc):messagebox.showwarning(
+                self.tr('Tipo servo'),f'{SERVO_CATALOG_PATH}\n{error}',parent=self))
+        initial=next(iter(self.servo_catalog))
+        self.vars['servo_type']=tk.StringVar(value=initial)
+        self.servo_name=tk.StringVar(value=initial)
+        self.vars['servo_type'].trace_add('write',self.sync_servo_name)
+        ttk.Label(box,text='Tipo servo').grid(row=1,column=0,sticky='w',pady=5)
+        self.servo_type_combo=ttk.Combobox(box,textvariable=self.servo_name,values=tuple(self.servo_catalog),state='readonly',width=20)
         self.servo_type_combo.grid(row=1,column=1,sticky='w');self.servo_type_combo.bind('<<ComboboxSelected>>',lambda event:self.load_servo_preset())
+        body=ttk.LabelFrame(box,text='Dimensioni del servo',padding=6)
+        cavity=ttk.LabelFrame(box,text='Quote dello scasso',padding=6)
+        placement=ttk.LabelFrame(box,text='Posizione e rotazione',padding=6)
+        for col,group in enumerate((body,cavity,placement)):
+            box.columnconfigure(col,weight=1)
+            group.grid(row=3,column=col,sticky='nsew',padx=4,pady=4)
+            group.columnconfigure(0,weight=1)
         self.servo_axis_buttons=[]
-        for col,value,label in ((0,'z','Rotazione attorno a Z'),(2,'y','Rotazione in pianta (asse Y)')):
-            button=ttk.Radiobutton(box,text=label,variable=self.vars['servo_rotation_axis'],value=value,command=self.toggle_servo)
-            button.grid(row=2,column=col,columnspan=2,sticky='w',padx=5,pady=6);self.servo_axis_buttons.append(button)
-        labels=(('Centro dalla radice (mm)','servo_dist_root_mm','100'),
-                ('Centro dal bordo d’attacco locale (mm)','servo_dist_le_mm','64'),
-                ('Angolo attorno a Z (gradi)','servo_rotate_z_deg','-7'),
-                ('Angolo in pianta (gradi)','servo_rotate_y_deg','45'),
-                ('Offset verso l’intradosso (mm)','servo_dist_depth_mm','10'),
-                ('Larghezza corpo X (mm)','servo_width_mm','8.5'),
-                ('Altezza corpo Y (mm)','servo_height_mm','16'),
-                ('Lunghezza corpo Z (mm)','servo_length_mm','20'),
-                ('Gioco per lato (mm)','servo_clearance_mm','0.3'),
-                ('Larghezza battuta perimetrale (mm)','servo_lid_lip_mm','2'),
-                ('Profondità sede coperchio (mm)','servo_lid_depth_mm','0.8'))
-        for i,(label,key,default) in enumerate(labels,2):
-            row=3+(i-2)//2;col=((i-2)%2)*2
-            self.vars[key]=tk.StringVar(value=default)
-            ttk.Label(box,text=label).grid(row=row,column=col,sticky='w',padx=5,pady=5)
-            entry=ttk.Entry(box,textvariable=self.vars[key],width=10);entry.grid(row=row,column=col+1,padx=(5,18),pady=5)
+        labels=((placement,'Centro dalla radice (mm)','servo_dist_root_mm','100'),
+                (placement,'Centro dal bordo d’attacco locale (mm)','servo_dist_le_mm','64'),
+                (placement,'Offset verso l’intradosso (mm)','servo_dist_depth_mm','10'),
+                (placement,'Rotazione attorno a Z','servo_rotate_z_deg','-7'),
+                (placement,'Rotazione in pianta (asse Y)','servo_rotate_y_deg','45'),
+                (body,'Larghezza corpo X (mm)','servo_width_mm','8.5'),
+                (body,'Altezza corpo Y (mm)','servo_height_mm','16'),
+                (body,'Lunghezza corpo Z (mm)','servo_length_mm','20'),
+                (cavity,'Gioco per lato (mm)','servo_clearance_mm','0.3'),
+                (cavity,'Larghezza battuta perimetrale (mm)','servo_lid_lip_mm','2'),
+                (cavity,'Profondità sede coperchio (mm)','servo_lid_depth_mm','0.8'))
+        for group,label,key,default in labels:
+            row=group.grid_size()[1]
+            preset=self.servo_catalog[initial]
+            self.vars[key]=tk.StringVar(value=f'{preset[key]:g}' if key in preset else default)
+            if key.startswith('servo_rotate_'):
+                caption=ttk.Radiobutton(group,text=label,variable=self.vars['servo_rotation_axis'],value=key.split('_')[2],command=self.toggle_servo)
+                self.servo_axis_buttons.append(caption)
+            else:caption=ttk.Label(group,text=label)
+            caption.grid(row=row,column=0,sticky='w',padx=3,pady=2)
+            entry=ttk.Entry(group,textvariable=self.vars[key],width=8);entry.grid(row=row,column=1,padx=3,pady=2)
             self.servo_entries.append(entry);self.vars[key].trace_add('write',lambda *_:self.draw_servo_preview())
             if key=='servo_rotate_z_deg':self.servo_z_entry=entry
             if key=='servo_rotate_y_deg':self.servo_y_entry=entry
-        self.servo_preset_button=ttk.Button(box,text='Ricarica misure indicative della taglia',command=self.load_servo_preset)
-        self.servo_preset_button.grid(row=9,column=0,columnspan=4,sticky='w',pady=6)
+        actions=ttk.Frame(box)
+        actions.grid(row=9,column=0,columnspan=4,sticky='w',pady=4)
+        self.servo_preset_button=ttk.Button(actions,text='Ricarica parametri del modello',command=self.load_servo_preset)
+        self.servo_preset_button.pack(side='left',padx=(0,8))
+        self.servo_save_button=ttk.Button(actions,text='Salva modello servo…',command=self.save_servo_preset)
+        self.servo_save_button.pack(side='left')
         ttk.Label(box,text='Le misure iniziali sono indicative e modificabili: il peso non identifica un ingombro standard. Le distanze individuano il centro del corpo. Offset positivo sposta il servo verso l’esterno dell’intradosso: in Y il corpo va da −offset ad altezza−offset, prima della rotazione. La battuta segue il profilo inferiore; il pannello di chiusura non viene generato. Se il corpo sporge, il futuro coperchio dovrà prevedere il relativo ingombro oppure andranno adattate misure e offset. Le modalità Z e in pianta sono alternative; l’angolo inattivo viene ignorato.',wraplength=900).grid(row=10,column=0,columnspan=4,sticky='w',pady=8)
-        self.servo_canvas=tk.Canvas(root,height=515,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
-        self.servo_canvas.pack(fill='x',pady=12);self.servo_canvas.bind('<Configure>',lambda event:self.draw_servo_preview())
+        self.servo_canvas=tk.Canvas(root,height=320,background='white',highlightthickness=1,highlightbackground='#cbd5e1')
+        self.servo_canvas.pack(fill='x',pady=6);self.servo_canvas.bind('<Configure>',lambda event:self.draw_servo_preview())
         self.vars['create_servo_void'].trace_add('write',lambda *_:self.toggle_servo())
         self.vars['servo_rotation_axis'].trace_add('write',lambda *_:self.toggle_servo())
         self.toggle_servo()
@@ -331,7 +361,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
 
     def draw_profile_preview(self):
         if getattr(self,"loading_configuration",False):return
-        canvas=self.profile_canvas;canvas.delete('all');width=max(300,canvas.winfo_width());height=175
+        canvas=self.profile_canvas;canvas.delete('all');width=max(100,canvas.winfo_width());height=max(120,canvas.winfo_height())
         try:
             p=dict(airfoil=self.vars['airfoil'].get().strip(),airfoil_tip=self.vars['airfoil_tip'].get().strip(),
                    custom_airfoil_root=self.vars['custom_airfoil_root'].get(),custom_airfoil_tip=self.vars['custom_airfoil_tip'].get(),points=80,span=1.)
@@ -347,8 +377,8 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
             all_points=[point for profile in profiles for point in profile]
             xmin=min(x for x,y in all_points);xmax=max(x for x,y in all_points)
             ymin=min(y for x,y in all_points);ymax=max(y for x,y in all_points)
-            scale=min((width-40)/max(.01,xmax-xmin),(height-55)/max(.02,ymax-ymin))
-            ox=(width-scale*(xmin+xmax))/2;oy=(height+25+scale*(ymin+ymax))/2
+            scale=min((width-40)/max(.01,xmax-xmin),(height-80)/max(.02,ymax-ymin))
+            ox=(width-scale*(xmin+xmax))/2;oy=(height+55+scale*(ymin+ymax))/2
             canvas.create_line(ox,oy,ox+max(chords)*scale,oy,dash=(3,3),fill='#cbd5e1')
             for profile,color,dash,key in zip(profiles,('#2563eb','#64748b','#ea580c'),((),(4,3),()),('root','middle','tip')):
                 coords=[coord for x,y in profile+[profile[0]] for coord in (ox+x*scale,oy-y*scale)]
@@ -360,7 +390,7 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
                     f"Metà apertura · {chords[1]:g} mm",
                     f"Estremità {display_profile('airfoil_tip','custom_airfoil_tip')} · {tip_chord:g} mm")
             for i,(text,color) in enumerate(zip(labels,('#2563eb','#64748b','#ea580c'))):
-                canvas.create_text(12+i*(width-24)/3,12,text=text,anchor='w',fill=color,font=('Segoe UI',9),tags='profile_legend')
+                canvas.create_text(12,12+i*16,text=text,anchor='w',fill=color,font=('Segoe UI',9),tags='profile_legend')
         except (ValueError,TypeError,ZeroDivisionError,OverflowError) as exc:
             canvas.create_text(width/2,height/2,text=str(exc),width=width-30,fill='#b91c1c',tags='profile_error')
 
@@ -380,35 +410,90 @@ class App(MenuMixin,ConfigurationMixin,tk.Tk):
         self.servo_z_entry.configure(state='normal' if enabled and self.vars['servo_rotation_axis'].get()=='z' else 'disabled')
         self.servo_y_entry.configure(state='normal' if enabled and self.vars['servo_rotation_axis'].get()=='y' else 'disabled')
         self.servo_type_combo.configure(state='readonly' if enabled else 'disabled')
-        self.servo_preset_button.configure(state='normal' if enabled else 'disabled')
+        self.servo_preset_button.configure(state='normal' if enabled and self.servo_name.get() in self.servo_catalog else 'disabled')
+        self.servo_save_button.configure(state='normal' if enabled else 'disabled')
         self.draw_servo_preview()
 
+    def sync_servo_name(self,*_):
+        model=self.vars['servo_type'].get()
+        self.servo_name.set(SERVO_NAMES.get(model,model))
+
     def load_servo_preset(self):
-        width,height,length=SERVO_PRESETS[int(self.vars['servo_type'].get())]
-        for key,value in (('servo_width_mm',width),('servo_height_mm',height),('servo_length_mm',length)):
+        model=self.servo_name.get()
+        if model not in self.servo_catalog:return
+        self.vars['servo_type'].set(model)
+        for key,value in self.servo_catalog[model].items():
             self.vars[key].set(f'{value:g}')
-        self.draw_servo_preview()
+        self.toggle_servo()
+
+    def save_servo_preset(self):
+        title=self.tr('Salva modello servo…')
+        current=self.servo_name.get()
+        try:
+            fields={key:float(self.vars[key].get().replace(',','.')) for key in SERVO_PRESET_FIELDS}
+            validate_servo_preset(current,fields)
+            catalog=load_servo_catalog()
+            previous=catalog.get(current)
+            if previous==fields:
+                messagebox.showinfo(title,self.tr('I parametri del modello sono già salvati.'),parent=self)
+                return
+            update=False
+            if previous is not None:
+                choice=messagebox.askyesnocancel(title,self.tr(
+                    'I parametri sono cambiati. Sì aggiorna il modello attuale. No crea un nuovo modello.'),parent=self)
+                if choice is None:return
+                update=choice
+            name=current
+            while not update:
+                entered=simpledialog.askstring(title,self.tr('Nome del nuovo modello servo'),parent=self)
+                if entered is None:return
+                name=entered.strip()
+                catalog=load_servo_catalog()
+                if any(name.casefold()==existing.casefold() for existing in catalog):
+                    messagebox.showwarning(title,self.tr('Esiste già un modello con questo nome.'),parent=self)
+                    continue
+                try:
+                    validate_servo_preset(name,fields)
+                except ValueError as exc:
+                    messagebox.showwarning(title,str(exc),parent=self)
+                    continue
+                break
+            if update:
+                catalog=load_servo_catalog()
+                if catalog.get(name)!=previous:
+                    raise ValueError(self.tr('Il modello è cambiato su disco. Riapri il salvataggio.'))
+            catalog[name]=fields
+            SERVO_CATALOG_PATH.parent.mkdir(parents=True,exist_ok=True)
+            write_configuration(SERVO_CATALOG_PATH,catalog)
+        except (OSError,ValueError) as exc:
+            messagebox.showerror(title,str(exc),parent=self)
+            return
+        self.servo_catalog=catalog
+        self.servo_type_combo.configure(values=tuple(catalog))
+        self.vars['servo_type'].set(name)
+        self.toggle_servo()
+        self.status.set(self.tr('Modello servo salvato.'))
 
     def draw_servo_preview(self):
         if getattr(self,"loading_configuration",False):return
         if not hasattr(self,'servo_canvas') or not hasattr(self,'section_panel'):return
-        canvas=self.servo_canvas;canvas.delete('all');width=max(600,canvas.winfo_width());height=515
+        canvas=self.servo_canvas;canvas.delete('all');width=max(600,canvas.winfo_width())
         try:
             p=params_from_ui(self.vars);layout=servo_layout(p)
             if not layout:
                 canvas.create_text(20,30,anchor='w',text='Scasso servo disattivato.');return
-            scale=min((width*.43-70)/(p['root_chord']+abs(p['sweep'])),280/p['span']);ox=40;oy=335
-            def xy(x,z):return ox+x*scale,oy-z*scale
             outline=[(x,z) for z,x in planform_outline(p)]
+            view=HorizontalView((24,48,width*.43-20,214),outline)
+            xy=view.xy
             canvas.create_polygon(*[v for point in outline for v in xy(*point)],fill='#e2e8f0',outline='#64748b')
             for key,color in (('outer_bounds','#d97706'),('inner_bounds','#dc2626')):
-                xmin,xmax,zmin,zmax=layout[key];coords=[]
+                coords=[]
                 for x,z in servo_footprint(layout,key,closed=True):
                     xx,yy,zz=washout_point(p,(x,servo_surface(p,z,x),z));coords.extend(xy(xx,zz))
                 canvas.create_line(*coords,fill=color,width=2,tags='servo')
             canvas.create_text(20,20,anchor='nw',text='Scasso servo sull’intradosso · posizione in pianta',fill='#475569',font=('Segoe UI',9))
             draw_servo_dimensions(canvas,layout,width*.46,width-24,p)
-            canvas.create_text(20,365,anchor='nw',width=width*.43-25,font=('Segoe UI',9),text=f"Rosso: accesso · arancio: sede coperchio\nRotazione: {'in pianta (Y)' if layout['servo_rotation_axis']=='y' else 'asse Z'} {layout['servo_rotate_y_deg'] if layout['servo_rotation_axis']=='y' else layout['servo_rotate_z_deg']:g}°\nSporgenza corpo stimata: {layout['protrusion_under_mm']:.1f} mm\nMargine verso estradosso: {layout['upper_margin_mm']:.1f} mm",fill=('#b91c1c' if layout['upper_margin_mm']<.715 else '#334155'))
+            canvas.create_text(20,231,anchor='nw',width=width*.43-25,font=('Segoe UI',9),text=f"Rosso: accesso · arancio: sede coperchio\nRotazione: {'in pianta (Y)' if layout['servo_rotation_axis']=='y' else 'asse Z'} {layout['servo_rotate_y_deg'] if layout['servo_rotation_axis']=='y' else layout['servo_rotate_z_deg']:g}°\nSporgenza corpo stimata: {layout['protrusion_under_mm']:.1f} mm\nMargine verso estradosso: {layout['upper_margin_mm']:.1f} mm",fill=('#b91c1c' if layout['upper_margin_mm']<.715 else '#334155'))
         except (ValueError,KeyError,TypeError,ZeroDivisionError) as exc:
             canvas.create_text(20,30,anchor='nw',text=str(exc),width=width-40,fill='#b91c1c',tags='servo_preview_error')
 

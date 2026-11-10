@@ -1,5 +1,5 @@
 """Display-only Italian/English translation; configuration keys stay unchanged."""
-# File revision: 12
+# File revision: 22
 import re,functools
 import tkinter as tk
 from tkinter import messagebox,filedialog
@@ -77,6 +77,33 @@ Freccia bordo attacco (mm) => Leading-edge sweep (mm)
 Punti profilo => Airfoil points
 Stazioni lungo Z => Stations along Z
 Pianta alare => Wing planform
+Profili alari => Airfoils
+Aggancio ai riferimenti => Snap to references
+Vista X/Z nominale. Clic: seleziona. Doppio clic: aggiungi un piano. Trascina per spostare. Tasto destro: elimina. Quote Z dalla base di stampa di ciascun componente. => Nominal X/Z view. Click to select. Double-click to add a plane. Drag to move. Right-click to delete. Z is measured from each component's print base.
+Inizio scasso alettone => Aileron recess start
+Fine scasso alettone => Aileron recess end
+Inizio punta alare => Wingtip start
+Tipo servo => Servo model
+Dimensioni del servo => Servo dimensions
+Quote dello scasso => Recess dimensions
+Posizione e rotazione => Position and rotation
+Salva modello servo… => Save servo model…
+I parametri del modello sono già salvati. => The model parameters are already saved.
+I parametri sono cambiati. Sì aggiorna il modello attuale. No crea un nuovo modello. => The parameters have changed. Yes updates the current model. No creates a new model.
+Nome del nuovo modello servo => New servo model name
+Esiste già un modello con questo nome. => A model with this name already exists.
+Il modello è cambiato su disco. Riapri il salvataggio. => The model changed on disk. Open the save dialog again.
+Modello servo salvato. => Servo model saved.
+Ricarica parametri del modello => Reload model parameters
+Componenti in scala comune · quote in mm => Components at a common scale · dimensions in mm
+Radice a sinistra · ingombro in pianta => Root at left · plan-view envelope
+Lunghezza utile · ingombro in pianta => Usable length · plan-view envelope
+Lunghezza utile · larghezze agli estremi => Usable length · end widths
+Diagonale lato cerniera · larghezze agli estremi => Hinge-side diagonal · end widths
+Proiezione in posizione di stampa => Projection in print orientation
+Trascina l’apice: in orizzontale per la lunghezza, in verticale per il centro. => Drag the apex horizontally to adjust length and vertically to adjust the centre.
+Vista nominale, senza washout. => Nominal view without washout.
+Ellisse con corda terminale finita per la stampa. Punta aggiuntiva disponibile. => Elliptical planform with finite tip chord for printing. Optional wingtip available.
 Linea centrale ellisse (% corda) => Ellipse centreline (% chord)
 Svergolamento progressivo dell’ala (washout) => Progressive wing washout
 Washout finale (gradi) => Final washout (degrees)
@@ -178,6 +205,11 @@ Elimina nodo => Delete node
 Ripristina pianta iniziale => Reset to initial planform
 Ripristina vista => Reset view
 Tangente terminale automatica => Automatic tip tangent
+Tipo di nodo => Node type
+Curva–curva => Curve–curve
+Retta–retta => Line–line
+Retta–curva => Line–curve
+Curva–retta => Curve–line
 Rotella e trascinamento spostano la vista. Con Maiusc agiscono solo sullo sfondo. Tasto destro sul bordo blu per aggiungere un nodo. => Scroll to zoom and drag to pan. Hold Shift to affect only the background. Right-click a blue edge to add a node.
 Importa immagine della pianta => Import planform image
 Tasto destro sul bordo blu per inserire un nodo. Trascina le maniglie per modificare la pianta. => Right-click a blue edge to insert a node. Drag the handles to edit the planform.
